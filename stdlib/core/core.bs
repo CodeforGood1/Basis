@@ -1,0 +1,227 @@
+// BASIS Standard Library - Core Module
+
+// ============================================================================
+// Absolute Value
+// ============================================================================
+
+public fn abs_i32(x: i32) -> i32 {
+    if x < 0 {
+        return -x;
+    } else {
+        return x;
+    }
+}
+
+public fn abs_i64(x: i64) -> i64 {
+    let zero: i64 = x - x;
+    if x < zero {
+        return -x;
+    } else {
+        return x;
+    }
+}
+
+// Convenience alias
+public fn abs(x: i32) -> i32 {
+    return abs_i32(x);
+}
+
+// ============================================================================
+// Min/Max Functions
+// ============================================================================
+
+public fn max_i32(a: i32, b: i32) -> i32 {
+    if a > b {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+public fn min_i32(a: i32, b: i32) -> i32 {
+    if a < b {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+public fn max_u32(a: u32, b: u32) -> u32 {
+    if a > b {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+public fn min_u32(a: u32, b: u32) -> u32 {
+    if a < b {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+public fn max_i64(a: i64, b: i64) -> i64 {
+    if a > b {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+public fn min_i64(a: i64, b: i64) -> i64 {
+    if a < b {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+public fn max_u64(a: u64, b: u64) -> u64 {
+    if a > b {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+public fn min_u64(a: u64, b: u64) -> u64 {
+    if a < b {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+// Convenience aliases (i32 versions)
+public fn max(a: i32, b: i32) -> i32 { return max_i32(a, b); }
+public fn min(a: i32, b: i32) -> i32 { return min_i32(a, b); }
+
+// ============================================================================
+// Clamp Functions
+// ============================================================================
+
+public fn clamp_i32(value: i32, min_val: i32, max_val: i32) -> i32 {
+    if value < min_val {
+        return min_val;
+    } elif value > max_val {
+        return max_val;
+    } else {
+        return value;
+    }
+}
+
+public fn clamp_u32(value: u32, min_val: u32, max_val: u32) -> u32 {
+    if value < min_val {
+        return min_val;
+    } elif value > max_val {
+        return max_val;
+    } else {
+        return value;
+    }
+}
+
+// Convenience alias
+public fn clamp(value: i32, min_val: i32, max_val: i32) -> i32 {
+    return clamp_i32(value, min_val, max_val);
+}
+
+// ============================================================================
+// Boolean Operations
+// ============================================================================
+
+public fn bool_not(x: bool) -> bool {
+    if x {
+        return false;
+    } else {
+        return true;
+    }
+}
+
+public fn bool_and(a: bool, b: bool) -> bool {
+    if a {
+        return b;
+    } else {
+        return false;
+    }
+}
+
+public fn bool_or(a: bool, b: bool) -> bool {
+    if a {
+        return true;
+    } else {
+        return b;
+    }
+}
+
+// ============================================================================
+// Assertions
+// ============================================================================
+
+extern fn exit(code: i32) -> void;
+
+public fn assert(cond: bool) -> void {
+    if bool_not(cond) {
+        exit(1);
+    }
+}
+
+public fn assert_eq_i32(a: i32, b: i32) -> void {
+    if a != b {
+        exit(1);
+    }
+}
+
+public fn assert_ne_i32(a: i32, b: i32) -> void {
+    if a == b {
+        exit(1);
+    }
+}
+
+public fn assert_true(cond: bool) -> void {
+    if bool_not(cond) {
+        exit(1);
+    }
+}
+
+public fn assert_false(cond: bool) -> void {
+    if cond {
+        exit(1);
+    }
+}
+
+// ============================================================================
+// Swap (using pointers)
+// ============================================================================
+
+public fn swap_i32(a: *i32, b: *i32) -> void {
+    let temp: i32 = *a;
+    *a = *b;
+    *b = temp;
+}
+
+public fn swap_u32(a: *u32, b: *u32) -> void {
+    let temp: u32 = *a;
+    *a = *b;
+    *b = temp;
+}
+
+// ============================================================================
+// Sign Function
+// ============================================================================
+
+public fn sign_i32(x: i32) -> i32 {
+    if x > 0 {
+        return 1;
+    } elif x < 0 {
+        return -1;
+    } else {
+        return 0;
+    }
+}
+
+public fn sign(x: i32) -> i32 {
+    return sign_i32(x);
+}
+

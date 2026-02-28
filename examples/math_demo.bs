@@ -1,0 +1,47 @@
+#[max_memory(16kb)]
+
+// Example: Using the math standard library
+// Demonstrates: square, cube, power, predicates
+
+import math::*;
+import io::*;
+
+fn main() -> i32 {
+    let x: i32 = 7;
+    
+    // Square and cube
+    print("square(7) = ");
+    out_i32(square_i32(x));
+    println("");
+    
+    print("cube(3) = ");
+    out_i32(cube_i32(3));
+    println("");
+    
+    // Power function
+    print("power(2, 10) = ");
+    out_i32(power_i32(2, 10));
+    println("");
+    
+    // Even/odd predicates
+    print("is_even(42) = ");
+    if is_even_i32(42) {
+        println("true");
+    } else {
+        println("false");
+    }
+    
+    print("is_odd(7) = ");
+    if is_odd_i32(7) {
+        println("true");
+    } else {
+        println("false");
+    }
+    
+    // Sign function
+    print("sign(-100) = ");
+    out_i32(sign_i32(-100));
+    println("");
+    
+    return 0;
+}

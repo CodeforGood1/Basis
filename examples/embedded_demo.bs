@@ -1,0 +1,123 @@
+// BASIS Embedded Systems Demo
+// Demonstrates volatile, while loops, @inline, @stack, bitwise ops
+
+#[max_memory(4kb)]
+
+// Runtime print functions (provided by BASIS runtime)
+extern fn print_str(s: *u8) -> void;
+extern fn print_u32(x: u32) -> void;
+
+// Simulated memory-mapped I/O register address
+const GPIO_BASE: u32 = 0x40020000 as u32;
+const GPIO_ODR_OFFSET: u32 = 0x14 as u32;
+
+// Inline helper for setting a bit
+@inline
+fn set_bit(value: u32, bit: u32) -> u32 {
+    return value | ((1 as u32) << bit);
+}
+
+// Inline helper for clearing a bit
+@inline
+fn clear_bit(value: u32, bit: u32) -> u32 {
+    return value & ~((1 as u32) << bit);
+}
+
+// Inline helper for testing a bit
+@inline
+fn test_bit(value: u32, bit: u32) -> bool {
+    return (value & ((1 as u32) << bit)) != (0 as u32);
+}
+
+// Simple delay loop with bounded iteration
+fn delay(count: i32) -> void @stack(16) {
+    let i: i32 = 0;
+    while i < count {
+        i = i + 1;
+    }
+}
+
+// Bitmask operations for register configuration
+fn configure_gpio_mask(pin: u32) -> u32 {
+    let mask: u32 = 0 as u32;
+    mask = set_bit(mask, pin);
+    return mask;
+}
+
+// CRC-8 calculation for fixed-size packet (common in embedded protocols)
+// Uses fixed packet size of 8 bytes for provable loop bounds
+const packet_size: i32 = 8;
+
+fn crc8_packet(data: *u8) -> u8 {
+    let crc: u8 = 0xFF as u8;
+    for i in 0..packet_size {
+        crc = crc ^ *(data + i);
+        for bit in 0..8 {
+            if (crc & (0x80 as u8)) != (0 as u8) {
+                crc = ((crc << (1 as u8)) ^ (0x07 as u8)) as u8;
+            } else {
+                crc = (crc << (1 as u8)) as u8;
+            }
+        }
+    }
+    return crc;
+}
+
+// Ring buffer for UART-style data
+struct RingBuffer {
+    head: u32,
+    tail: u32,
+    count: u32,
+    capacity: u32,
+}
+
+fn ring_buffer_init(capacity: u32) -> RingBuffer {
+    return RingBuffer {
+        head: 0 as u32,
+        tail: 0 as u32,
+        count: 0 as u32,
+        capacity: capacity,
+    };
+}
+
+fn ring_buffer_is_full(buf: RingBuffer) -> bool {
+    return buf.count == buf.capacity;
+}
+
+fn ring_buffer_is_empty(buf: RingBuffer) -> bool {
+    return buf.count == (0 as u32);
+}
+
+fn main() -> i32 {
+    // Test bit operations
+    let reg: u32 = 0 as u32;
+    reg = set_bit(reg, 5 as u32);
+    reg = set_bit(reg, 13 as u32);
+
+    if test_bit(reg, 5 as u32) {
+        print_str("Pin 5 is set\n");
+    }
+
+    reg = clear_bit(reg, 5 as u32);
+    if !test_bit(reg, 5 as u32) {
+        print_str("Pin 5 cleared\n");
+    }
+
+    // Test GPIO mask
+    let mask: u32 = configure_gpio_mask(7 as u32);
+    print_str("GPIO mask: ");
+    print_u32(mask);
+    print_str("\n");
+
+    // Test ring buffer
+    let rb: RingBuffer = ring_buffer_init(64 as u32);
+    if ring_buffer_is_empty(rb) {
+        print_str("Ring buffer initialized (empty)\n");
+    }
+
+    // Test delay
+    delay(100);
+    print_str("Delay complete\n");
+
+    return 0;
+}

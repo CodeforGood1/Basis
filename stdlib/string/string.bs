@@ -1,0 +1,168 @@
+// BASIS Standard Library - String Utilities
+// Functions for working with null-terminated strings (*u8)
+
+// ============================================================================
+// Extern Bindings (C standard library)
+// ============================================================================
+
+extern fn strlen(s: *u8) -> i32;
+extern fn strcmp(s1: *u8, s2: *u8) -> i32;
+extern fn strncmp(s1: *u8, s2: *u8, n: i32) -> i32;
+extern fn strcpy(dest: *u8, src: *u8) -> *u8;
+extern fn strncpy(dest: *u8, src: *u8, n: i32) -> *u8;
+extern fn strcat(dest: *u8, src: *u8) -> *u8;
+extern fn strchr(s: *u8, c: i32) -> *u8;
+
+// ============================================================================
+// String Length
+// ============================================================================
+
+// Get length of null-terminated string (excluding null terminator)
+public fn len(s: *u8) -> i32 {
+    return strlen(s);
+}
+
+// Alias for len
+public fn length(s: *u8) -> i32 {
+    return strlen(s);
+}
+
+// ============================================================================
+// String Comparison
+// ============================================================================
+
+// Compare two strings: returns 0 if equal, <0 if s1<s2, >0 if s1>s2
+public fn str_cmp(s1: *u8, s2: *u8) -> i32 {
+    return strcmp(s1, s2);
+}
+
+// Check if two strings are equal
+public fn str_eq(s1: *u8, s2: *u8) -> bool {
+    return strcmp(s1, s2) == 0;
+}
+
+// Compare first n characters
+public fn str_cmp_n(s1: *u8, s2: *u8, n: i32) -> i32 {
+    return strncmp(s1, s2, n);
+}
+
+// Check if string starts with prefix
+public fn str_starts_with(s: *u8, prefix: *u8) -> bool {
+    let prefix_len: i32 = strlen(prefix);
+    return strncmp(s, prefix, prefix_len) == 0;
+}
+
+// ============================================================================
+// String Copy
+// ============================================================================
+
+// Copy string src to dest (dest must be large enough!)
+public fn str_copy(dest: *u8, src: *u8) -> void {
+    strcpy(dest, src);
+}
+
+// Copy at most n characters from src to dest
+public fn str_copy_n(dest: *u8, src: *u8, n: i32) -> void {
+    strncpy(dest, src, n);
+}
+
+// ============================================================================
+// String Concatenation
+// ============================================================================
+
+// Append src to dest (dest must have enough space!)
+public fn str_append(dest: *u8, src: *u8) -> void {
+    strcat(dest, src);
+}
+
+// ============================================================================
+// Character Search
+// ============================================================================
+
+// Find first occurrence of character in string, returns pointer or null
+public fn str_find_char(s: *u8, c: u8) -> *u8 {
+    return strchr(s, c as i32);
+}
+
+// ============================================================================
+// Character Classification (ASCII)
+// ============================================================================
+
+// Check if character is a digit (0-9)
+public fn is_digit(c: u8) -> bool {
+    if c >= 48 as u8 {
+        if c <= 57 as u8 {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Check if character is uppercase letter (A-Z)
+public fn is_upper(c: u8) -> bool {
+    if c >= 65 as u8 {
+        if c <= 90 as u8 {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Check if character is lowercase letter (a-z)
+public fn is_lower(c: u8) -> bool {
+    if c >= 97 as u8 {
+        if c <= 122 as u8 {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Check if character is a letter (A-Z or a-z)
+public fn is_alpha(c: u8) -> bool {
+    if is_upper(c) {
+        return true;
+    }
+    return is_lower(c);
+}
+
+// Check if character is alphanumeric (letter or digit)
+public fn is_alnum(c: u8) -> bool {
+    if is_alpha(c) {
+        return true;
+    }
+    return is_digit(c);
+}
+
+// Check if character is whitespace (space, tab, newline, etc.)
+public fn is_space(c: u8) -> bool {
+    if c == 32 as u8 {
+        return true;
+    }
+    if c == 9 as u8 {
+        return true;
+    }
+    if c == 10 as u8 {
+        return true;
+    }
+    if c == 13 as u8 {
+        return true;
+    }
+    return false;
+}
+
+// Convert uppercase to lowercase
+public fn to_lower(c: u8) -> u8 {
+    if is_upper(c) {
+        return c + 32 as u8;
+    }
+    return c;
+}
+
+// Convert lowercase to uppercase
+public fn to_upper(c: u8) -> u8 {
+    if is_lower(c) {
+        return c - 32 as u8;
+    }
+    return c;
+}

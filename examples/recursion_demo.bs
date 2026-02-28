@@ -1,0 +1,50 @@
+#[max_memory(512kb)]
+import io::*;
+fn factorial(n: i32) -> i32 {
+    let result: i32 = 1;
+    for i in 1..13 { 
+        if i <= n {
+            result = result * i;
+        }
+    }
+    return result;
+}
+fn fibonacci(n: i32) -> i32 {
+    if n <= 1 {
+        return n;
+    }
+    let a: i32 = 0;
+    let b: i32 = 1;
+    let temp: i32 = 0;
+    for i in 2..21 {  
+        if i <= n {
+            temp = a + b;
+            a = b;
+            b = temp;
+        }
+    }
+    return b;
+}
+
+fn main() -> i32 {
+    println("Factorial examples:");
+    for i in 0..8 {
+        print("  factorial(");
+        out_i32(i);
+        print(") = ");
+        out_i32(factorial(i));
+        println("");
+    }
+    
+    println("");
+    println("Fibonacci examples:");
+    for i in 0..10 {
+        print("  fib(");
+        out_i32(i);
+        print(") = ");
+        out_i32(fibonacci(i));
+        println("");
+    }
+    
+    return 0;
+}

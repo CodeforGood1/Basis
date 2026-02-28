@@ -1,0 +1,66 @@
+// BASIS Standard Library - Memory (Phase 2)
+// Explicit heap allocation utilities
+
+// Extern bindings
+extern fn malloc(size: u32) -> *u8;
+extern fn free(ptr: *u8) -> void;
+extern fn memset(ptr: *u8, value: i32, size: u32) -> *u8;
+extern fn memcpy(dest: *u8, src: *u8, size: u32) -> *u8;
+
+// Allocate raw bytes
+public fn alloc_bytes(size: u32) -> *u8 {
+    return malloc(size);
+}
+
+// Allocate zero-initialized bytes
+public fn alloc_zeroed(size: u32) -> *u8 {
+    let ptr: *u8 = malloc(size);
+    memset(ptr, 0, size);
+    return ptr;
+}
+
+// Free raw bytes
+public fn free_bytes(ptr: *u8) -> void {
+    free(ptr);
+}
+
+// Allocate i32 array (count elements, 4 bytes each)
+public fn alloc_i32(count: u32) -> *i32 {
+    let total: u32 = count * (4 as u32);
+    let ptr: *u8 = malloc(total);
+    return ptr as *i32;
+}
+
+// Allocate u8 array (count elements)
+public fn alloc_u8(count: u32) -> *u8 {
+    return malloc(count);
+}
+
+// Allocate u32 array (count elements, 4 bytes each)
+public fn alloc_u32(count: u32) -> *u32 {
+    let total: u32 = count * (4 as u32);
+    let ptr: *u8 = malloc(total);
+    return ptr as *u32;
+}
+
+// Allocate i64 array (count elements, 8 bytes each)
+public fn alloc_i64(count: u32) -> *i64 {
+    let total: u32 = count * (8 as u32);
+    let ptr: *u8 = malloc(total);
+    return ptr as *i64;
+}
+
+// Copy memory between regions
+public fn mem_copy(dest: *u8, src: *u8, size: u32) -> void {
+    memcpy(dest, src, size);
+}
+
+// Zero out a memory region
+public fn mem_zero(ptr: *u8, size: u32) -> void {
+    memset(ptr, 0, size);
+}
+
+// Fill memory with a byte value
+public fn mem_set(ptr: *u8, value: u8, size: u32) -> void {
+    memset(ptr, value as i32, size);
+}

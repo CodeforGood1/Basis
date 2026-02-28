@@ -1,0 +1,10 @@
+#[max_memory(8kb)]
+
+import io::*;
+
+fn main() -> i32 {
+    println("Hello from BASIS!");
+    print("Testing print without newline... ");
+    println("done.");
+    return 0;
+}

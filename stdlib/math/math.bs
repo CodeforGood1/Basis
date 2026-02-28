@@ -1,0 +1,153 @@
+// BASIS Standard Library - Math Module
+// Provides advanced mathematical operations (square, power, etc.)
+// For basic min/max/clamp/abs, use core module
+
+// ============================================================================
+// Square and Cube
+// ============================================================================
+
+public fn square_i32(x: i32) -> i32 {
+    return x * x;
+}
+
+public fn square_u32(x: u32) -> u32 {
+    return x * x;
+}
+
+public fn cube_i32(x: i32) -> i32 {
+    return x * x * x;
+}
+
+public fn cube_u32(x: u32) -> u32 {
+    return x * x * x;
+}
+
+// ============================================================================
+// Integer Power (exponentiation)
+// ============================================================================
+
+public fn power_i32(base: i32, exp: i32) -> i32 {
+    let result: i32 = 1;
+    let e: i32 = exp;
+    let b: i32 = base;
+    
+    if e < 0 {
+        return 0;
+    }
+    
+    for i in 0..32 {
+        if e == 0 {
+            break;
+        }
+        let odd: bool = (e - ((e / 2) * 2)) == 1;
+        if odd {
+            result = result * b;
+        }
+        b = b * b;
+        e = e / 2;
+    }
+    
+    return result;
+}
+
+// ============================================================================
+// Parity (even/odd)
+// ============================================================================
+
+public fn is_even_i32(x: i32) -> bool {
+    return (x - ((x / 2) * 2)) == 0;
+}
+
+public fn is_odd_i32(x: i32) -> bool {
+    return (x - ((x / 2) * 2)) != 0;
+}
+
+// ============================================================================
+// Sign functions
+// ============================================================================
+
+public fn sign_i32(x: i32) -> i32 {
+    if x > 0 {
+        return 1;
+    } elif x < 0 {
+        return 0 - 1;
+    } else {
+        return 0;
+    }
+}
+
+public fn is_positive_i32(x: i32) -> bool {
+    return x > 0;
+}
+
+public fn is_negative_i32(x: i32) -> bool {
+    return x < 0;
+}
+
+// ============================================================================
+// Greatest Common Divisor (Euclidean algorithm)
+// ============================================================================
+
+public fn gcd(a: i32, b: i32) -> i32 {
+    let x: i32 = abs_i32(a);
+    let y: i32 = abs_i32(b);
+    while y != 0 {
+        let temp: i32 = y;
+        y = x - ((x / y) * y);
+        x = temp;
+    }
+    return x;
+}
+
+// ============================================================================
+// Integer Division Rounding Up
+// ============================================================================
+
+// Divide n by d, rounding up (e.g., div_ceil(7, 4) = 2)
+// Useful for buffer sizing: div_ceil(data_bits, 8) = bytes needed
+public fn div_ceil(n: i32, d: i32) -> i32 {
+    return (n + d - 1) / d;
+}
+
+// ============================================================================
+// Power of Two Check
+// ============================================================================
+
+// Check if x is a power of 2 (useful for alignment validation)
+public fn is_power_of_two(x: i32) -> bool {
+    if x <= 0 {
+        return false;
+    }
+    // x & (x-1) == 0 means power of two, using subtraction trick
+    let check: i32 = x - 1;
+    // Manual bit check: if x AND (x-1) == 0
+    // Since we don't have & yet, use division approach
+    let val: i32 = x;
+    while val > 1 {
+        let half: i32 = val / 2;
+        if half * 2 != val {
+            return false;
+        }
+        val = half;
+    }
+    return true;
+}
+
+// ============================================================================
+// Linear Mapping (Embedded Sensor Scaling)
+// ============================================================================
+
+// Map a value from [in_min, in_max] to [out_min, out_max]
+// Common use: map ADC reading (0..4095) to temperature (0..100)
+public fn map_range(value: i32, in_min: i32, in_max: i32, out_min: i32, out_max: i32) -> i32 {
+    return (value - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
+// Convenience alias
+fn abs_i32(x: i32) -> i32 {
+    if x < 0 {
+        return -x;
+    } else {
+        return x;
+    }
+}

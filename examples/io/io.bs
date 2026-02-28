@@ -1,0 +1,31 @@
+// BASIS Standard Library - IO (Phase 3)
+// Thin C ABI bindings for basic output
+
+// Extern bindings - basic C functions
+extern fn puts(s: *u8) -> i32;
+
+// Specialized print externs (to avoid variadic printf)
+// These will be provided as inline C helpers
+extern fn print_str(s: *u8) -> void;
+extern fn print_int(x: i32) -> void;
+extern fn print_uint(x: u32) -> void;
+
+// Print string without newline  
+public fn print(s: *u8) -> void {
+    print_str(s);
+}
+
+// Print string with newline
+public fn println(s: *u8) -> void {
+    puts(s);
+}
+
+// Print i32 value (no newline)
+public fn print_i32(x: i32) -> void {
+    print_int(x);
+}
+
+// Print u32 value (no newline)
+public fn print_u32(x: u32) -> void {
+    print_uint(x);
+}

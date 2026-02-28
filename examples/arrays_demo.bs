@@ -1,0 +1,51 @@
+#[max_memory(8kb)]
+
+// Example: Arrays and loops
+// Demonstrates: fixed-size arrays, for loops, bounds-safe access
+
+import io::*;
+
+fn sum_array(arr: [i32; 5]) -> i32 {
+    let total: i32 = 0;
+    for i in 0..5 {
+        total = total + arr[i];
+    }
+    return total;
+}
+
+fn find_max(arr: [i32; 5]) -> i32 {
+    let max_val: i32 = arr[0];
+    for i in 1..5 {
+        if arr[i] > max_val {
+            max_val = arr[i];
+        }
+    }
+    return max_val;
+}
+
+fn main() -> i32 {
+    let numbers: [i32; 5] = [10, 25, 5, 30, 15];
+    
+    print("Array: [10, 25, 5, 30, 15]");
+    println("");
+    
+    print("Sum: ");
+    out_i32(sum_array(numbers));
+    println("");
+    
+    print("Max: ");
+    out_i32(find_max(numbers));
+    println("");
+    
+    // Demonstrate bounded loop
+    println("Elements:");
+    for i in 0..5 {
+        print("  [");
+        out_i32(i);
+        print("] = ");
+        out_i32(numbers[i]);
+        println("");
+    }
+    
+    return 0;
+}

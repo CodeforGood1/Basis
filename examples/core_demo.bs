@@ -1,0 +1,25 @@
+#[max_memory(16kb)]
+import core::*;
+import io::*;
+fn main() -> i32 {
+    let negative: i32 = -42;
+    let positive: i32 = abs_i32(negative);
+    print("abs(-42) = ");
+    out_i32(positive);
+    println("");
+    let a: i32 = 10;
+    let b: i32 = 25;
+    print("min(10, 25) = ");
+    out_i32(min_i32(a, b));
+    println("");
+    print("max(10, 25) = ");
+    out_i32(max_i32(a, b));
+    println("");
+    let value: i32 = 150;
+    let clamped: i32 = clamp_i32(value, 0, 100);
+    print("clamp(150, 0, 100) = ");
+    out_i32(clamped);
+    println("");
+    
+    return 0;
+}

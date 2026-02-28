@@ -1,0 +1,26 @@
+#[max_memory(8kb)]
+
+// Example: Heap memory allocation
+// Demonstrates: alloc_bytes, free_bytes, alloc_i32
+
+import mem::*;
+import io::*;
+
+fn main() -> i32 {
+    println("Allocating 128 bytes...");
+    let buffer: *u8 = alloc_bytes(128 as u32);
+    
+    println("Allocating array of 10 i32s (40 bytes)...");
+    let arr: *i32 = alloc_i32(10 as u32);
+    
+    // Use the memory...
+    println("Memory allocated successfully!");
+    
+    // Always free what you allocate
+    free_bytes(buffer);
+    // Note: arr was allocated as u8 internally, cast back to free
+    free_bytes(arr as *u8);
+    
+    println("Memory freed.");
+    return 0;
+}

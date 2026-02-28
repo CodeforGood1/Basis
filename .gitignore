@@ -1,0 +1,39 @@
+# Build outputs
+build/
+build_test/
+build_temp/
+
+# Distribution
+dist/
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.spec
+
+# Executables
+*.exe
+
+# Test artifacts
+test_input/*.c
+test_input/*.h
+test_input/*.exe
+test_array_return/
+
+# Editor
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Root-level duplicates (authoritative copies in compiler/)
+/limitations.md
+/safeguards.md
+/syntax.md
+/test_input.bs

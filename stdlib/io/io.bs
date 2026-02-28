@@ -1,0 +1,140 @@
+// BASIS Standard Library - IO
+// Thin C ABI bindings for input and output
+
+// ============================================================================
+// Extern Bindings - Output
+// ============================================================================
+
+extern fn puts(s: *u8) -> i32;
+
+// Print externs (non-variadic wrappers provided by compiler)
+extern fn print_str(s: *u8) -> void;
+extern fn print_i8(x: i8) -> void;
+extern fn print_i16(x: i16) -> void;
+extern fn print_i32(x: i32) -> void;
+extern fn print_i64(x: i64) -> void;
+extern fn print_u8(x: u8) -> void;
+extern fn print_u16(x: u16) -> void;
+extern fn print_u32(x: u32) -> void;
+extern fn print_u64(x: u64) -> void;
+extern fn print_f32(x: f32) -> void;
+extern fn print_f64(x: f64) -> void;
+extern fn print_bool(x: bool) -> void;
+extern fn print_char(c: u8) -> void;
+extern fn print_ptr(p: *u8) -> void;
+extern fn print_int(x: i32) -> void;
+extern fn print_uint(x: u32) -> void;
+
+// ============================================================================
+// Extern Bindings - Input
+// ============================================================================
+
+// Input externs (non-variadic wrappers provided by compiler)
+extern fn read_i32() -> i32;
+extern fn read_i64() -> i64;
+extern fn read_u32() -> u32;
+extern fn read_u64() -> u64;
+extern fn read_f32() -> f32;
+extern fn read_f64() -> f64;
+extern fn read_char() -> u8;
+extern fn read_line(buf: *u8, max_len: i32) -> void;
+
+// ============================================================================
+// String Output
+// ============================================================================
+
+public fn print(s: *u8) -> void { print_str(s); }
+public fn println(s: *u8) -> void { puts(s); }
+public fn newline() -> void { print_char(10 as u8); }
+
+// Convenience aliases
+public fn out_str(s: *u8) -> void { print_str(s); }
+public fn out_ln() -> void { print_char(10 as u8); }
+
+// ============================================================================
+// Integer Output (no newline) - Primary API: print_*
+// ============================================================================
+
+// Note: These call the compiler-provided extern print_* functions directly.
+// The public wrappers use out_* naming to avoid symbol conflicts.
+public fn out_i8(x: i8) -> void { print_i8(x); }
+public fn out_i16(x: i16) -> void { print_i16(x); }
+public fn out_i32(x: i32) -> void { print_i32(x); }
+public fn out_i64(x: i64) -> void { print_i64(x); }
+public fn out_u8(x: u8) -> void { print_u8(x); }
+public fn out_u16(x: u16) -> void { print_u16(x); }
+public fn out_u32(x: u32) -> void { print_u32(x); }
+public fn out_u64(x: u64) -> void { print_u64(x); }
+
+// ============================================================================
+// Floating Point Output (no newline)
+// ============================================================================
+
+public fn out_f32(x: f32) -> void { print_f32(x); }
+public fn out_f64(x: f64) -> void { print_f64(x); }
+
+// ============================================================================
+// Boolean/Char/Pointer Output (no newline)
+// ============================================================================
+
+public fn out_bool(x: bool) -> void { print_bool(x); }
+public fn out_char(c: u8) -> void { print_char(c); }
+public fn out_ptr(p: *u8) -> void { print_ptr(p); }
+
+// ============================================================================
+// Print with Space (for mixed output)
+// ============================================================================
+
+public fn space() -> void { print_char(32 as u8); }
+public fn sp_i32(x: i32) -> void { print_i32(x); space(); }
+public fn sp_u32(x: u32) -> void { print_u32(x); space(); }
+public fn sp_i64(x: i64) -> void { print_i64(x); space(); }
+public fn sp_u64(x: u64) -> void { print_u64(x); space(); }
+public fn sp_f32(x: f32) -> void { print_f32(x); space(); }
+public fn sp_f64(x: f64) -> void { print_f64(x); space(); }
+public fn sp_bool(x: bool) -> void { print_bool(x); space(); }
+public fn sp_str(s: *u8) -> void { print_str(s); space(); }
+
+// ============================================================================
+// Input Functions
+// ============================================================================
+
+// Read integers from stdin
+public fn in_i32() -> i32 { return read_i32(); }
+public fn in_i64() -> i64 { return read_i64(); }
+public fn in_u32() -> u32 { return read_u32(); }
+public fn in_u64() -> u64 { return read_u64(); }
+
+// Read floating point from stdin
+public fn in_f32() -> f32 { return read_f32(); }
+public fn in_f64() -> f64 { return read_f64(); }
+
+// Read single character from stdin
+public fn in_char() -> u8 { return read_char(); }
+
+// Read line into buffer (strips newline)
+public fn in_line(buf: *u8, max_len: i32) -> void { read_line(buf, max_len); }
+
+// ============================================================================
+// Prompted Input (convenience functions)
+// ============================================================================
+
+public fn prompt_i32(msg: *u8) -> i32 {
+    print_str(msg);
+    return read_i32();
+}
+
+public fn prompt_i64(msg: *u8) -> i64 {
+    print_str(msg);
+    return read_i64();
+}
+
+public fn prompt_f64(msg: *u8) -> f64 {
+    print_str(msg);
+    return read_f64();
+}
+
+public fn prompt_line(msg: *u8, buf: *u8, max_len: i32) -> void {
+    print_str(msg);
+    read_line(buf, max_len);
+}
