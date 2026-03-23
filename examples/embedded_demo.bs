@@ -1,11 +1,15 @@
 // BASIS Embedded Systems Demo
-// Demonstrates volatile, while loops, @inline, @stack, bitwise ops
+// Demonstrates volatile, bounded loops, @inline, @stack, bitwise ops
 
 #[max_memory(4kb)]
 
 // Runtime print functions (provided by BASIS runtime)
+@deterministic
+@blocking
 @stack(64)
 extern fn print_str(s: *u8) -> void;
+@deterministic
+@blocking
 @stack(64)
 extern fn print_u32(x: u32) -> void;
 

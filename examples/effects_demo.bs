@@ -1,0 +1,29 @@
+#[max_memory(8kb)]
+
+@deterministic
+@stack(32)
+extern fn checksum(seed: u32) -> u32;
+
+@deterministic
+@blocking
+@stack(48)
+extern fn log_line(s: *u8) -> void;
+
+@deterministic
+@allocates(max=96)
+@stack(32)
+extern fn reserve_dma() -> *u8;
+
+fn compute(seed: u32) -> u32 {
+    return checksum(seed);
+}
+
+fn main() -> i32 {
+    let value: u32 = compute(7 as u32);
+    let buffer: *u8 = reserve_dma();
+    log_line("effects demo");
+    if value == (0 as u32) && buffer == (0 as *u8) {
+        return 1;
+    }
+    return 0;
+}

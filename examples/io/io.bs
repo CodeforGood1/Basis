@@ -2,14 +2,16 @@
 // Thin C ABI bindings for basic output
 
 // Extern bindings - basic C functions
+@deterministic
+@blocking
 @stack(64)
 extern fn puts(s: *u8) -> i32;
 
 // Specialized print externs (to avoid variadic printf)
 // These will be provided as inline C helpers
-@stack(64) extern fn print_str(s: *u8) -> void;
-@stack(64) extern fn print_int(x: i32) -> void;
-@stack(64) extern fn print_uint(x: u32) -> void;
+@deterministic @blocking @stack(64) extern fn print_str(s: *u8) -> void;
+@deterministic @blocking @stack(64) extern fn print_int(x: i32) -> void;
+@deterministic @blocking @stack(64) extern fn print_uint(x: u32) -> void;
 
 // Print string without newline  
 public fn print(s: *u8) -> void {

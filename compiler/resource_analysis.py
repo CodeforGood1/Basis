@@ -58,6 +58,8 @@ class FunctionResource:
     recursion_depth: Optional[int]
     deterministic: bool
     isr_safe: bool
+    blocking: bool
+    allocates: bool
     is_interrupt: bool
     call_path: List[str] = field(default_factory=list)
 
@@ -78,6 +80,8 @@ class FunctionInfo:
     recursion_depth: Optional[int] = None
     deterministic: bool = True
     isr_safe: bool = False
+    blocking: bool = False
+    allocates: bool = False
     is_interrupt: bool = False
     direct_calls: Set[str] = field(default_factory=set)
     call_path: List[str] = field(default_factory=list)
@@ -97,6 +101,14 @@ class CallComponent:
     is_recursive: bool
     recursion_depth: Optional[int] = None
     outgoing_components: Set[int] = field(default_factory=set)
+
+
+@dataclass(frozen=True)
+class EffectSummary:
+    deterministic: bool
+    isr_safe: bool
+    blocking: bool
+    allocates: bool
 
 
 class CallGraph:
@@ -210,7 +222,7 @@ class ProgramResourceAnalyzer:
 
         self._node_stack_cache: Dict[str, Tuple[int, List[str]]] = {}
         self._component_stack_cache: Dict[int, Tuple[int, List[str]]] = {}
-        self._component_effect_cache: Dict[int, Tuple[bool, bool]] = {}
+        self._component_effect_cache: Dict[int, EffectSummary] = {}
         self._heap_cache: Dict[str, int] = {}
 
         self.total_stack_bytes = 0
@@ -227,7 +239,9 @@ class ProgramResourceAnalyzer:
         self._compute_local_heap_usage()
         self._validate_recursive_heap_usage()
         self._compute_total_heap_usage()
+        self._validate_effect_contracts()
         self._compute_effects()
+        self._validate_effect_assertions()
         self._validate_interrupts()
         self._apply_stack_budgets()
         self._finalize_resources()
@@ -509,7 +523,12 @@ class ProgramResourceAnalyzer:
             return 0
 
         info = self.functions[qualified_name]
-        if info.is_extern or not info.decl.body or info.name in self._ALLOC_WRAPPERS:
+        if info.is_extern:
+            extern_heap = self._extern_heap_budget(info)
+            self._heap_cache[qualified_name] = extern_heap
+            return extern_heap
+
+        if not info.decl.body or info.name in self._ALLOC_WRAPPERS:
             self._heap_cache[qualified_name] = 0
             return 0
 
@@ -524,6 +543,20 @@ class ProgramResourceAnalyzer:
         )
         self._heap_cache[qualified_name] = total_heap
         return total_heap
+
+    def _extern_heap_budget(self, info: FunctionInfo) -> int:
+        allocates_annotation = self._find_annotation(info.decl.annotations, "allocates")
+        if allocates_annotation is None:
+            return 0
+
+        if info.name in self._DIRECT_ALLOCATORS:
+            return 0
+
+        if allocates_annotation.arguments:
+            budget = self._annotation_int_value(info, allocates_annotation, ("max", "bytes", "value"))
+            return budget or 0
+
+        return 0
 
     def _calculate_heap_usage(
         self,
@@ -779,42 +812,161 @@ class ProgramResourceAnalyzer:
                 bounded[param.name] = 1000
         return bounded
 
+    def _validate_effect_contracts(self):
+        for info in self.functions.values():
+            has_deterministic = self._has_annotation(info.decl.annotations, "deterministic")
+            has_nondeterministic = self._has_annotation(info.decl.annotations, "nondeterministic")
+            has_blocking = self._has_annotation(info.decl.annotations, "blocking")
+            has_isr_safe = self._has_annotation(info.decl.annotations, "isr_safe")
+            allocates_annotation = self._find_annotation(info.decl.annotations, "allocates")
+
+            if has_deterministic and has_nondeterministic:
+                self._error(
+                    "E_EFFECT_CONFLICT",
+                    f"function '{info.name}' cannot be both @deterministic and @nondeterministic",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if has_isr_safe and has_nondeterministic:
+                self._error(
+                    "E_EFFECT_CONFLICT",
+                    f"function '{info.name}' cannot be both @isr_safe and @nondeterministic",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if has_isr_safe and has_blocking:
+                self._error(
+                    "E_EFFECT_CONFLICT",
+                    f"function '{info.name}' cannot be both @isr_safe and @blocking",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if has_isr_safe and allocates_annotation is not None:
+                self._error(
+                    "E_EFFECT_CONFLICT",
+                    f"function '{info.name}' cannot be both @isr_safe and @allocates",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if not info.is_extern:
+                continue
+
+            if not has_deterministic and not has_nondeterministic:
+                self._error(
+                    "E_EXTERN_EFFECT_REQUIRED",
+                    f"extern function '{info.name}' must declare @deterministic or @nondeterministic",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if allocates_annotation is not None and info.name not in self._DIRECT_ALLOCATORS:
+                if not allocates_annotation.arguments:
+                    self._error(
+                        "E_EXTERN_ALLOCATES_BUDGET_REQUIRED",
+                        f"extern function '{info.name}' uses @allocates and requires @allocates(max=N) for heap budgeting",
+                        allocates_annotation.span,
+                        info.module_name,
+                    )
+                else:
+                    self._annotation_int_value(info, allocates_annotation, ("max", "bytes", "value"))
+
     def _compute_effects(self):
         for component_index in range(len(self.components)):
-            deterministic, isr_safe = self._component_effects(component_index)
+            summary = self._component_effects(component_index)
             component = self.components[component_index]
             for member in component.members:
                 info = self.functions[member]
-                info.deterministic = deterministic
-                info.isr_safe = isr_safe
+                info.deterministic = summary.deterministic
+                info.isr_safe = summary.isr_safe
+                info.blocking = summary.blocking
+                info.allocates = summary.allocates
 
-    def _component_effects(self, component_index: int) -> Tuple[bool, bool]:
+    def _component_effects(self, component_index: int) -> EffectSummary:
         if component_index in self._component_effect_cache:
             return self._component_effect_cache[component_index]
 
         component = self.components[component_index]
         deterministic = True
         isr_safe = True
+        blocking = False
+        allocates = False
 
         for member in component.members:
             info = self.functions[member]
-            if self._has_annotation(info.decl.annotations, "nondeterministic"):
-                deterministic = False
-
-            if info.is_extern:
-                if not self._has_annotation(info.decl.annotations, "isr_safe"):
-                    isr_safe = False
-            else:
-                if info.total_heap_bytes > 0:
-                    isr_safe = False
+            base_effects = self._base_effects(info)
+            deterministic = deterministic and base_effects.deterministic
+            isr_safe = isr_safe and base_effects.isr_safe
+            blocking = blocking or base_effects.blocking
+            allocates = allocates or base_effects.allocates
 
         for target in component.outgoing_components:
-            target_deterministic, target_isr_safe = self._component_effects(target)
-            deterministic = deterministic and target_deterministic
-            isr_safe = isr_safe and target_isr_safe
+            target_effects = self._component_effects(target)
+            deterministic = deterministic and target_effects.deterministic
+            isr_safe = isr_safe and target_effects.isr_safe
+            blocking = blocking or target_effects.blocking
+            allocates = allocates or target_effects.allocates
 
-        self._component_effect_cache[component_index] = (deterministic, isr_safe)
-        return deterministic, isr_safe
+        isr_safe = isr_safe and deterministic and not blocking and not allocates
+
+        summary = EffectSummary(
+            deterministic=deterministic,
+            isr_safe=isr_safe,
+            blocking=blocking,
+            allocates=allocates,
+        )
+        self._component_effect_cache[component_index] = summary
+        return summary
+
+    def _base_effects(self, info: FunctionInfo) -> EffectSummary:
+        has_deterministic = self._has_annotation(info.decl.annotations, "deterministic")
+        has_nondeterministic = self._has_annotation(info.decl.annotations, "nondeterministic")
+        has_blocking = self._has_annotation(info.decl.annotations, "blocking")
+        has_isr_safe = self._has_annotation(info.decl.annotations, "isr_safe")
+        has_allocates = self._find_annotation(info.decl.annotations, "allocates") is not None
+
+        if info.is_extern:
+            deterministic = has_deterministic and not has_nondeterministic
+            return EffectSummary(
+                deterministic=deterministic,
+                isr_safe=has_isr_safe,
+                blocking=has_blocking,
+                allocates=has_allocates,
+            )
+
+        deterministic = not has_nondeterministic
+        allocates = has_allocates or info.local_heap_bytes > 0
+        isr_safe = deterministic and not has_blocking and not allocates
+        return EffectSummary(
+            deterministic=deterministic,
+            isr_safe=isr_safe,
+            blocking=has_blocking,
+            allocates=allocates,
+        )
+
+    def _validate_effect_assertions(self):
+        for info in self.functions.values():
+            if info.is_extern:
+                continue
+
+            if self._has_annotation(info.decl.annotations, "deterministic") and not info.deterministic:
+                self._error(
+                    "E_DETERMINISM_CONTRACT",
+                    f"function '{info.name}' is annotated @deterministic but calls non-deterministic code",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if self._has_annotation(info.decl.annotations, "isr_safe") and not info.isr_safe:
+                self._error(
+                    "E_ISR_SAFETY_CONTRACT",
+                    f"function '{info.name}' is annotated @isr_safe but is not ISR-safe",
+                    info.decl.span,
+                    info.module_name,
+                )
 
     def _validate_interrupts(self):
         for info in self.functions.values():
@@ -870,6 +1022,14 @@ class ProgramResourceAnalyzer:
                     info.module_name,
                 )
 
+            if info.blocking:
+                self._error(
+                    "E_INTERRUPT_BLOCKING",
+                    "@interrupt functions cannot call blocking code",
+                    info.decl.span,
+                    info.module_name,
+                )
+
             if not info.deterministic:
                 self._error(
                     "E_INTERRUPT_NONDETERMINISTIC",
@@ -912,6 +1072,8 @@ class ProgramResourceAnalyzer:
                 recursion_depth=info.recursion_depth,
                 deterministic=info.deterministic,
                 isr_safe=info.isr_safe,
+                blocking=info.blocking,
+                allocates=info.allocates,
                 is_interrupt=info.is_interrupt,
                 call_path=call_path,
             )

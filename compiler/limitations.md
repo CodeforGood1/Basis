@@ -161,6 +161,9 @@ When you hit a limitation, the compiler provides specific errors:
 | `E_MISSING_RECURSION_ANNOTATION` | Recursive function needs `@recursion(max=N)` |
 | `E_UNBOUNDED_HEAP` | Allocation size not compile-time constant |
 | `E_EXTERN_STACK_REQUIRED` | `extern fn` must declare `@stack(N)` |
+| `E_EXTERN_EFFECT_REQUIRED` | `extern fn` must declare `@deterministic` or `@nondeterministic` |
+| `E_EXTERN_ALLOCATES_BUDGET_REQUIRED` | generic `extern fn` with `@allocates` needs `@allocates(max=N)` |
+| `E_EFFECT_CONFLICT` | incompatible effect annotations were combined |
 | `E_INDEX_OUT_OF_BOUNDS` | Array access exceeds declared size |
 | `E_EXTERN_VARIADIC` | Variadic extern functions not supported |
 | `E_TYPE_MISMATCH` | Explicit type annotation required |

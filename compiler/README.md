@@ -88,7 +88,7 @@ Memory Budget: 1232/262144 bytes (0.5% used)
 - **Call-graph stack** - Deepest reachable stack is computed across function calls
 - **Loop termination** - `while` loops are rejected; only bounded `for` loops remain
 - **Heap allocation** - Sizes must be compile-time constants
-- **Extern contracts** - `extern fn` declarations must provide `@stack(N)`
+- **Extern contracts** - `extern fn` declarations must provide `@stack(N)` and an explicit determinism contract
 - **ISR validation** - `@interrupt` handlers must be deterministic, heap-free, and ISR-safe
 
 ### 4. Standard Library
@@ -127,7 +127,11 @@ python basis.py build main.bs --show-resources
 | `E_MISSING_RECURSION_ANNOTATION` | Recursive function needs `@recursion(max=N)` |
 | `E_UNBOUNDED_HEAP` | Allocation size not compile-time constant |
 | `E_EXTERN_STACK_REQUIRED` | `extern fn` is missing `@stack(N)` |
+| `E_EXTERN_EFFECT_REQUIRED` | `extern fn` must declare `@deterministic` or `@nondeterministic` |
+| `E_EXTERN_ALLOCATES_BUDGET_REQUIRED` | generic `extern fn` with `@allocates` needs `@allocates(max=N)` |
+| `E_EFFECT_CONFLICT` | incompatible effect annotations were combined |
 | `E_INTERRUPT_SIGNATURE` | `@interrupt` handler has invalid signature |
+| `E_INTERRUPT_BLOCKING` | `@interrupt` handler calls blocking code |
 | `E_MISSING_RETURN` | Function must return value on all paths |
 | `E_INVALID_RETURN_TYPE` | Cannot return arrays by value |
 | `missing #[max_memory]` | File lacks memory directive |
@@ -204,8 +208,10 @@ v1.0/
 
 ### Extern Declaration Syntax
 ```
-@stack(N) extern fn IDENTIFIER(param_list?) -> type;
-@stack(N) extern fn IDENTIFIER(param_list?) -> type = "symbol_name";
+@deterministic @isr_safe @stack(N) extern fn IDENTIFIER(param_list?) -> type;
+@deterministic @blocking @stack(N) extern fn IDENTIFIER(param_list?) -> type;
+@deterministic @allocates(max=N) @stack(N) extern fn IDENTIFIER(param_list?) -> type;
+@nondeterministic @blocking @stack(N) extern fn IDENTIFIER(param_list?) -> type = "symbol_name";
 param_list ::= param ("," param)*
 param ::= IDENTIFIER ":" type
 ```
@@ -213,6 +219,10 @@ param ::= IDENTIFIER ":" type
 - Forbidden in extern signatures: arrays, slices, function pointers, opaque handles, managed/high-level types. 
 - Variadic functions: forbidden.
 - `@stack(N)` is required on every extern so the whole-program call graph stays bounded.
+- Every extern must declare exactly one determinism contract: `@deterministic` or `@nondeterministic`.
+- `@blocking`, `@allocates(max=N)`, and `@isr_safe` are optional refinements.
+- `@isr_safe` cannot be combined with `@blocking`, `@allocates`, or `@nondeterministic`.
+- Bare `@allocates` is only valid for compiler-known allocator models such as `malloc`; generic foreign allocators must use `@allocates(max=N)`.
 
 ### Name Binding Rules
 - Default symbol name = BASIS identifier, case-sensitive, no mangling.
@@ -228,7 +238,9 @@ param ::= IDENTIFIER ":" type
 ### Memory & Ownership Rules
 - No implicit allocation or freeing by the compiler.
 - No ownership transfer by default; caller retains ownership of pointers passed/received unless explicitly documented externally.
-- Heap behavior outside compiler unless future annotations (none in v1.0).
+- Foreign heap behavior is explicit: `@allocates(max=N)` contributes to heap budgets, and compiler-known allocators are modeled directly at call sites.
+- Blocking behavior is explicit: `@blocking` propagates through the call graph and disqualifies ISR use.
+- Determinism across extern boundaries is explicit: `@deterministic` / `@nondeterministic` propagate through the call graph.
 
 ### Header Emission Rules
 - Headers generated only for non-entry modules; entry (main) emits no header.
@@ -246,11 +258,14 @@ param ::= IDENTIFIER ":" type
 - `E_EXTERN_VARIADIC`: variadic externs are not supported.
 - `E_EXTERN_STRUCTRET`: struct return not supported by target ABI.
 - `E_EXTERN_BODY`: extern functions must not have bodies.
+- `E_EXTERN_EFFECT_REQUIRED`: extern functions must declare `@deterministic` or `@nondeterministic`.
+- `E_EXTERN_ALLOCATES_BUDGET_REQUIRED`: generic foreign allocators must use `@allocates(max=N)`.
+- `E_EFFECT_CONFLICT`: incompatible effect annotations were combined.
 
 ## PART B — Compiler Responsibilities
 - Store extern declarations (with optional alias) in symbol table.
 - Type check externs like declared functions without bodies; validate parameter/return types.
-- Exclude extern bodies from resource/loop analyses; analyze call sites only.
+- Exclude extern bodies from resource/loop analyses; analyze call sites using explicit effect contracts.
 - Externs do not create module import dependencies.
 - Emit C prototypes respecting visibility and aliasing; no bodies generated.
 
@@ -271,7 +286,8 @@ param ::= IDENTIFIER ":" type
 - Extern symbols recorded in AST and symbol table with alias info.
 - Externs participate in type checking; bodies forbidden.
 - Externs excluded from resource/loop analyses beyond call-site effects.
+- Extern effects participate in determinism, blocking, heap, and ISR-safety propagation.
 - Public externs → prototypes in headers; private externs → static prototypes in .c.
 - No code emitted for extern bodies; zero-overhead direct calls.
 - ABI-compatible prototypes generated with correct C types and calling convention.
-- Diagnostics enforced: E_EXTERN_TYPE, E_EXTERN_ALIAS, E_EXTERN_VARIADIC, E_EXTERN_STRUCTRET, E_EXTERN_BODY.
+- Diagnostics enforced: E_EXTERN_TYPE, E_EXTERN_ALIAS, E_EXTERN_VARIADIC, E_EXTERN_STRUCTRET, E_EXTERN_BODY, E_EXTERN_EFFECT_REQUIRED, E_EXTERN_ALLOCATES_BUDGET_REQUIRED, E_EFFECT_CONFLICT.

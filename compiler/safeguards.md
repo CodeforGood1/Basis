@@ -215,6 +215,25 @@ for i in 0..10 {
 }
 ```
 
+## Foreign Call Effect Contracts
+
+Extern calls are not treated as opaque anymore. Each `extern fn` must declare:
+- `@stack(N)` for call-graph stack budgeting
+- exactly one of `@deterministic` or `@nondeterministic`
+
+Optional effect refinements:
+- `@blocking` for calls that may wait or stall
+- `@allocates(max=N)` for generic foreign allocators
+- `@isr_safe` for deterministic, non-blocking, non-allocating foreign calls
+
+```basis
+@deterministic @isr_safe @stack(32) extern fn board_crc(seed: u32) -> u32;
+@nondeterministic @blocking @stack(64) extern fn read_i32() -> i32;
+@deterministic @allocates(max=96) @stack(48) extern fn reserve_dma() -> *u8;
+```
+
+These effects propagate through the same whole-program call graph used for stack analysis, so the compiler can reject interrupt handlers that call non-deterministic, blocking, or heap-allocating foreign code.
+
 ---
 
 ## Type Safety
@@ -350,6 +369,8 @@ fn grade(score: i32) -> i32 {
 | Recursion depth | Semantic analysis | `E_MISSING_RECURSION_ANNOTATION` |
 | Loop termination | Semantic analysis | `E_UNBOUNDED_LOOP` |
 | Heap size known | Resource analysis | `E_UNBOUNDED_HEAP` |
+| Extern effect contract | Resource analysis | `E_EXTERN_EFFECT_REQUIRED` |
+| Foreign allocator budget | Resource analysis | `E_EXTERN_ALLOCATES_BUDGET_REQUIRED` |
 | Type matching | Type check | `E_TYPE_MISMATCH` |
 | Memory directive | Parse/compile | `missing #[max_memory(SIZE)] directive` |
 
@@ -366,6 +387,7 @@ With BASIS, you get **compile-time guarantees** that:
 5. **No runaway recursion** — Recursion depth declared and enforced
 6. **No type confusion** — Explicit types, explicit casts
 7. **No hidden allocations** — All memory usage visible in source
-8. **No missing returns** — All code paths return proper values
+8. **No hidden blocking across externs** — `@blocking` propagates through the call graph
+9. **No missing returns** — All code paths return proper values
 
 **If it compiles, it fits in memory.**

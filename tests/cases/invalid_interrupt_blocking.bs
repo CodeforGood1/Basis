@@ -1,0 +1,11 @@
+#[max_memory(4kb)]
+
+@deterministic
+@blocking
+@stack(32)
+extern fn uart_flush() -> void;
+
+@interrupt
+public fn bad_irq() -> void {
+    uart_flush();
+}

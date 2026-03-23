@@ -7,11 +7,11 @@ Public APIs
 - print_u32(x: u32) -> void
 
 Externs
-- extern fn printf(fmt: *u8) -> i32;
-- extern fn puts(s: *u8) -> i32;
+- @deterministic @blocking @stack(64) extern fn print_str(s: *u8) -> void;
+- @deterministic @blocking @stack(64) extern fn puts(s: *u8) -> i32;
 
 Rules
 - Thin C ABI only
 - No allocation or formatting abstractions
 - No safety layers or variadic exposure
-- No heap usage or hidden behavior
+- Explicit effect contracts on foreign calls

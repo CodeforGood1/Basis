@@ -136,12 +136,14 @@ fn fill_data(out: *u8) -> void { ... }      // Use out parameter
 
 ### Extern Functions (C Interop)
 ```basis
-@stack(64) extern fn malloc(size: u32) -> *u8;
-@stack(64) extern fn free(ptr: *u8) -> void;
-@stack(64) extern fn printf(fmt: *u8) -> i32 = "printf";  // With alias
+@deterministic @allocates @stack(64) extern fn malloc(size: u32) -> *u8;
+@deterministic @stack(64) extern fn free(ptr: *u8) -> void;
+@nondeterministic @blocking @stack(64) extern fn read_i32() -> i32;
+@deterministic @blocking @stack(64) extern fn puts(s: *u8) -> i32;
 ```
 
-Every `extern fn` must declare `@stack(N)` so the compiler can include foreign calls in the whole-program stack graph.
+Every `extern fn` must declare `@stack(N)` and exactly one determinism contract: `@deterministic` or `@nondeterministic`.
+`@blocking`, `@allocates(max=N)`, and `@isr_safe` are optional effect refinements.
 
 ### Structs
 ```basis
@@ -288,10 +290,22 @@ fn factorial(n: i32) -> i32 {
 
 ### Stack Annotation
 ```basis
-@stack(64) extern fn board_crc(seed: u32) -> u32;
+@deterministic @isr_safe @stack(64) extern fn board_crc(seed: u32) -> u32;
 ```
 
 `@stack(N)` is required on `extern fn` declarations and can also be used as a budget on normal functions.
+
+### Effect Annotations
+```basis
+@deterministic @isr_safe @stack(32) extern fn board_crc(seed: u32) -> u32;
+@nondeterministic @blocking @stack(64) extern fn read_i32() -> i32;
+@deterministic @allocates(max=128) @stack(48) extern fn reserve_dma() -> *u8;
+```
+
+- `@deterministic` / `@nondeterministic` declare whether a foreign call is repeatable from the compiler's point of view.
+- `@blocking` marks calls that may wait or stall and therefore cannot be used from ISR code.
+- `@allocates(max=N)` marks generic foreign calls that allocate heap; compiler-known allocators such as `malloc` may use bare `@allocates`.
+- `@isr_safe` declares that a foreign call is deterministic, non-blocking, and non-allocating.
 
 ### Interrupt Annotation
 ```basis
@@ -301,7 +315,7 @@ public fn systick_handler() -> void {
 }
 ```
 
-`@interrupt` handlers must be `public`, take no parameters, return `void`, allocate no heap, and only call deterministic ISR-safe code.
+`@interrupt` handlers must be `public`, take no parameters, return `void`, allocate no heap, call no blocking code, and only call deterministic ISR-safe code.
 
 ---
 

@@ -453,6 +453,8 @@ def compile_basis(input_files: List[str],
                     print(f"    Recursion: depth {resource.recursion_depth}")
                 print(f"    Deterministic: {'yes' if resource.deterministic else 'no'}")
                 print(f"    ISR-safe:      {'yes' if resource.isr_safe else 'no'}")
+                print(f"    Blocking:      {'yes' if resource.blocking else 'no'}")
+                print(f"    Allocates:     {'yes' if resource.allocates else 'no'}")
                 if resource.is_interrupt:
                     print(f"    Interrupt:     yes")
                 if resource.call_path:

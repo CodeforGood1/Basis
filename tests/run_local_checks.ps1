@@ -62,6 +62,10 @@ Invoke-BasisCheck `
     -CommandArgs @("build", "examples\callgraph_demo.bs", "--show-resources", "--run") `
     -RequiredText @("callgraph_demo::main -> callgraph_demo::stage_one -> callgraph_demo::stage_two -> callgraph_demo::leaf")
 
+Invoke-BasisCheck `
+    -CommandArgs @("build", "examples\effects_demo.bs", "--show-resources", "--emit-c") `
+    -RequiredText @("Blocking:      yes", "Allocates:     yes", "Heap (total):        96 bytes")
+
 Invoke-BasisCheck -CommandArgs @("build", "examples\embedded_demo.bs", "--emit-c", "--target", "esp32")
 Invoke-BasisCheck -CommandArgs @("build", "examples\isr_demo.bs", "--lib", "--emit-c", "--target", "esp32")
 
@@ -91,8 +95,28 @@ Invoke-BasisCheck `
     -RequiredText @("E_EXTERN_STACK_REQUIRED")
 
 Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_extern_missing_effect.bs") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_EXTERN_EFFECT_REQUIRED")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_extern_effect_conflict.bs") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_EFFECT_CONFLICT")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_extern_allocates_budget.bs") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_EXTERN_ALLOCATES_BUDGET_REQUIRED")
+
+Invoke-BasisCheck `
     -CommandArgs @("build", "tests\cases\invalid_interrupt_nondeterministic.bs") `
     -ExpectSuccess $false `
     -RequiredText @("E_INTERRUPT_NONDETERMINISTIC")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_interrupt_blocking.bs") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_INTERRUPT_BLOCKING")
 
 Write-Host "All BASIS local checks passed."

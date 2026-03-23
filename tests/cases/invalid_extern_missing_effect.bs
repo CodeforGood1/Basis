@@ -1,0 +1,8 @@
+#[max_memory(1kb)]
+
+@stack(32)
+extern fn platform_tick() -> u32;
+
+fn main() -> i32 {
+    return platform_tick() as i32;
+}

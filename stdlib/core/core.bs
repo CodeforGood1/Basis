@@ -159,6 +159,8 @@ public fn bool_or(a: bool, b: bool) -> bool {
 // Assertions
 // ============================================================================
 
+@deterministic
+@blocking
 @stack(32)
 extern fn exit(code: i32) -> void;
 
