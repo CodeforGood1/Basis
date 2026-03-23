@@ -28,7 +28,12 @@ fn main() -> i32 {
 - explicit memory budgets per module
 - whole-program call-graph stack analysis
 - bounded heap/resource accounting
+- persistent-storage budgeting
 - interrupt-safe code validation
+- task entry-point validation
+- strict deterministic module profiles
+- rollover-safe time helpers
+- MMIO-oriented `volatile` register access
 - explicit foreign-function effect contracts
 - C code generation for host and embedded integration
 
@@ -40,7 +45,12 @@ BASIS already has:
 - no `while` loops; only bounded `for` loops remain
 - bounded recursion through `@recursion(max=N)`
 - interrupt handlers through `@interrupt`
-- explicit foreign-call contracts such as `@deterministic`, `@blocking`, `@allocates`, and `@isr_safe`
+- task entry points through `@task(stack=N, priority=N)`
+- strict modules through `#[strict]`
+- persistent-storage budgets through `#[max_storage(...)]`, `#[max_storage_objects(...)]`, and `@storage(...)`
+- time helpers in `stdlib/time`
+- MMIO helpers in `stdlib/mmio`
+- explicit foreign-call contracts such as `@deterministic`, `@blocking`, `@allocates`, `@storage`, `@reentrant`, `@uses_timer`, `@may_fail`, and `@isr_safe`
 - a C backend and local examples/tests
 
 It is best understood today as a serious embedded language prototype moving toward a usable language platform.
@@ -75,6 +85,15 @@ python compiler/basis.py build examples/hello.bs --emit-c
 
 ```bash
 python compiler/basis.py build examples/callgraph_demo.bs --show-resources --run
+```
+
+### Explore Embedded-Oriented Features
+
+```bash
+python compiler/basis.py build examples/time_demo.bs --run
+python compiler/basis.py build examples/task_demo.bs --show-resources --emit-c
+python compiler/basis.py build examples/storage_demo.bs --show-resources --emit-c
+python compiler/basis.py build examples/mmio_demo.bs --emit-c --target esp32
 ```
 
 ### Verify the Install
@@ -131,7 +150,7 @@ Every BASIS file declares a maximum memory budget:
 
 ### Compile-Time Resource Analysis
 
-The compiler reports stack, heap, code-size estimate, and deepest call path:
+The compiler reports stack, heap, task-stack, storage usage, code-size estimate, and deepest call path:
 
 ```
 ======================================================================
@@ -141,9 +160,11 @@ RESOURCE ANALYSIS
 Program Size Summary:
   Stack (max):         20 bytes
   Heap (total):       512 bytes
+  Task stack:        1024 bytes
+  Storage use:        256 bytes / 2 objects
   Code (~):           700 bytes
   -------------------------------
-  TOTAL:             1232 bytes (1.20 KB)
+  TOTAL:             2256 bytes (2.20 KB)
   Deepest path:  main -> filter -> accumulate
 ======================================================================
 ```
@@ -154,7 +175,10 @@ Program Size Summary:
 - bounded recursion checks
 - whole-program stack checks
 - heap size checks
+- persistent-storage budget checks
 - interrupt validation
+- task entry-point validation
+- strict module validation
 - explicit foreign-function contracts
 
 ## Documentation Index
@@ -179,9 +203,15 @@ Program Size Summary:
 | `E_EXTERN_STACK_REQUIRED` | `extern fn` is missing `@stack(N)` |
 | `E_EXTERN_EFFECT_REQUIRED` | `extern fn` must declare `@deterministic` or `@nondeterministic` |
 | `E_EXTERN_ALLOCATES_BUDGET_REQUIRED` | generic `extern fn` with `@allocates` needs `@allocates(max=N)` |
+| `E_STORAGE_CONTRACT_REQUIRED` | `@storage` must declare bytes and/or object budgets |
 | `E_EFFECT_CONFLICT` | incompatible effect annotations were combined |
 | `E_INTERRUPT_SIGNATURE` | `@interrupt` handler has invalid signature |
 | `E_INTERRUPT_BLOCKING` | `@interrupt` handler calls blocking code |
+| `E_INTERRUPT_STORAGE` | `@interrupt` handler uses persistent storage |
+| `E_TASK_SIGNATURE` | `@task` entry point has invalid signature |
+| `E_TASK_STACK_REQUIRED` | `@task` requires an explicit stack budget |
+| `E_TASK_INTERRUPT_CONFLICT` | function cannot be both `@task` and `@interrupt` |
+| `E_STRICT_BLOCKING` | `#[strict]` module calls blocking code |
 | `E_MISSING_RETURN` | Function must return value on all paths |
 | `E_INVALID_RETURN_TYPE` | Cannot return arrays by value |
 | `missing #[max_memory]` | File lacks memory directive |

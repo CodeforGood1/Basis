@@ -60,6 +60,7 @@ class Module(ASTNode):
     name: str  # Module name (from filename)
     declarations: List['Declaration']
     max_memory_bytes: Optional[int] = None  # max_memory directive (required for main files)
+    directives: Dict[str, object] = field(default_factory=dict)
 
 
 # ============================================================================

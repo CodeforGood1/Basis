@@ -51,7 +51,10 @@ $hostExamples = @(
     "examples\math_demo.bs",
     "examples\arrays_demo.bs",
     "examples\memory_demo.bs",
-    "examples\recursion_demo.bs"
+    "examples\recursion_demo.bs",
+    "examples\time_demo.bs",
+    "examples\task_demo.bs",
+    "examples\strict_demo.bs"
 )
 
 foreach ($example in $hostExamples) {
@@ -67,6 +70,24 @@ Invoke-BasisCheck `
     -RequiredText @("Blocking:      yes", "Allocates:     yes", "Heap (total):        96 bytes")
 
 Invoke-BasisCheck -CommandArgs @("build", "examples\embedded_demo.bs", "--emit-c", "--target", "esp32")
+Invoke-BasisCheck `
+    -CommandArgs @("build", "examples\time_demo.bs", "--run") `
+    -RequiredText @("deadline_reached=false", "before=true")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "examples\task_demo.bs", "--show-resources", "--emit-c") `
+    -RequiredText @("Task:          yes (1024B stack)", "Task Stack Budget: 1024/2048 bytes")
+
+$taskSource = Get-Content .\build\task_demo.c -Raw
+if (-not $taskSource.Contains('BASIS_REGION("iram") BASIS_TASK void telemetry_task')) {
+    throw "Generated task C does not contain BASIS_REGION/BASIS_TASK task signature."
+}
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "examples\storage_demo.bs", "--show-resources", "--emit-c") `
+    -RequiredText @("Storage Budget: 512/1024 bytes", "Storage Objects: 4/8")
+
+Invoke-BasisCheck -CommandArgs @("build", "examples\mmio_demo.bs", "--emit-c", "--target", "esp32")
 Invoke-BasisCheck -CommandArgs @("build", "examples\isr_demo.bs", "--lib", "--emit-c", "--target", "esp32")
 
 $isrSource = Get-Content .\build\isr_demo.c -Raw
@@ -118,5 +139,45 @@ Invoke-BasisCheck `
     -CommandArgs @("build", "tests\cases\invalid_interrupt_blocking.bs") `
     -ExpectSuccess $false `
     -RequiredText @("E_INTERRUPT_BLOCKING")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_interrupt_storage.bs") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_INTERRUPT_STORAGE")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_task_params.bs") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_TASK_SIGNATURE")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_task_return.bs") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_TASK_SIGNATURE")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_task_missing_stack.bs") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_TASK_STACK_REQUIRED")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_task_interrupt_conflict.bs") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_TASK_INTERRUPT_CONFLICT")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_storage_contract.bs") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_STORAGE_CONTRACT_REQUIRED")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_strict_blocking.bs") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_STRICT_BLOCKING")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_region_expr.bs") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_INVALID_REGION")
 
 Write-Host "All BASIS local checks passed."

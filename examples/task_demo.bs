@@ -1,0 +1,16 @@
+#[max_memory(32kb)]
+#[max_task_stack(2kb)]
+
+import io::*;
+
+@task(stack=1024, priority=2)
+@region("iram")
+public fn telemetry_task() -> void {
+    print("telemetry task executed");
+    newline();
+}
+
+public fn main() -> i32 {
+    telemetry_task();
+    return 0;
+}

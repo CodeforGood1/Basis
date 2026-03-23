@@ -1,0 +1,18 @@
+#[max_memory(8kb)]
+#[max_storage(1kb)]
+#[max_storage_objects(8)]
+
+@deterministic
+@storage(max_bytes=128, max_objects=1)
+@stack(64)
+extern fn append_log(record_id: u32) -> void;
+
+public fn persist_batch() -> void {
+    for i in 0..4 {
+        append_log(i as u32);
+    }
+}
+
+public fn main() -> void {
+    persist_batch();
+}

@@ -72,9 +72,11 @@ RESOURCE ANALYSIS
 Program Size Summary:
   Stack (max):         20 bytes
   Heap (total):       512 bytes
+  Task stack:        1024 bytes
+  Storage use:        256 bytes / 2 objects
   Code (~):           700 bytes
   -------------------------------
-  TOTAL:             1232 bytes (1.20 KB)
+  TOTAL:             2256 bytes (2.20 KB)
   Deepest path:  main -> filter -> accumulate
 ======================================================================
 
@@ -88,10 +90,19 @@ Memory Budget: 1232/262144 bytes (0.5% used)
 - **Call-graph stack** - Deepest reachable stack is computed across function calls
 - **Loop termination** - `while` loops are rejected; only bounded `for` loops remain
 - **Heap allocation** - Sizes must be compile-time constants
+- **Task validation** - `@task(stack=N, ...)` functions must have a valid entry signature
+- **Persistent storage budgets** - storage bytes and object counts can be budgeted just like heap
+- **Strict modules** - `#[strict]` rejects blocking, heap, persistent storage, and nondeterministic code
 - **Extern contracts** - `extern fn` declarations must provide `@stack(N)` and an explicit determinism contract
 - **ISR validation** - `@interrupt` handlers must be deterministic, heap-free, and ISR-safe
 
 ### 4. Standard Library
+
+Core modules include `core`, `mem`, `io`, and `math`. Additional embedded-focused
+modules now include:
+- `time/` for rollover-safe tick helpers
+- `mmio/` for volatile register access helpers
+
 ```
 stdlib/
 ├── core/    # abs, min, max, clamp
@@ -113,6 +124,11 @@ python basis.py build main.bs --run
 
 # Show all resources
 python basis.py build main.bs --show-resources
+
+# Explore tasks, storage budgets, and time helpers
+python basis.py build ../examples/task_demo.bs --show-resources --emit-c
+python basis.py build ../examples/storage_demo.bs --show-resources --emit-c
+python basis.py build ../examples/time_demo.bs --run
 ```
 
 ---
@@ -129,9 +145,15 @@ python basis.py build main.bs --show-resources
 | `E_EXTERN_STACK_REQUIRED` | `extern fn` is missing `@stack(N)` |
 | `E_EXTERN_EFFECT_REQUIRED` | `extern fn` must declare `@deterministic` or `@nondeterministic` |
 | `E_EXTERN_ALLOCATES_BUDGET_REQUIRED` | generic `extern fn` with `@allocates` needs `@allocates(max=N)` |
+| `E_STORAGE_CONTRACT_REQUIRED` | `@storage` must declare bytes and/or object budgets |
 | `E_EFFECT_CONFLICT` | incompatible effect annotations were combined |
 | `E_INTERRUPT_SIGNATURE` | `@interrupt` handler has invalid signature |
 | `E_INTERRUPT_BLOCKING` | `@interrupt` handler calls blocking code |
+| `E_INTERRUPT_STORAGE` | `@interrupt` handler uses persistent storage |
+| `E_TASK_SIGNATURE` | `@task` entry point has invalid signature |
+| `E_TASK_STACK_REQUIRED` | `@task` requires an explicit stack budget |
+| `E_TASK_INTERRUPT_CONFLICT` | function cannot be both `@task` and `@interrupt` |
+| `E_STRICT_BLOCKING` | `#[strict]` module calls blocking code |
 | `E_MISSING_RETURN` | Function must return value on all paths |
 | `E_INVALID_RETURN_TYPE` | Cannot return arrays by value |
 | `missing #[max_memory]` | File lacks memory directive |

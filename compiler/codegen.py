@@ -68,6 +68,12 @@ class CCodeGenerator:
         self._emit_line("#ifndef BASIS_INTERRUPT")
         self._emit_line("#define BASIS_INTERRUPT")
         self._emit_line("#endif")
+        self._emit_line("#ifndef BASIS_TASK")
+        self._emit_line("#define BASIS_TASK")
+        self._emit_line("#endif")
+        self._emit_line("#ifndef BASIS_REGION")
+        self._emit_line("#define BASIS_REGION(name)")
+        self._emit_line("#endif")
         self._emit_line("")
         
         # Scan AST for referenced runtime helpers and emit only those used
@@ -231,6 +237,34 @@ class CCodeGenerator:
             if ann.name == ann_name and ann.arguments:
                 return ann.arguments.get(arg_name)
         return None
+
+    def _emit_annotation_literal(self, expr) -> Optional[str]:
+        """Emit a simple annotation argument suitable for C attributes/macros."""
+        if expr is None:
+            return None
+        if isinstance(expr, LiteralExpr):
+            if expr.kind == "string":
+                escaped = expr.value.replace("\\", "\\\\").replace('"', '\\"')
+                return f'"{escaped}"'
+            return expr.value
+        if isinstance(expr, IdentifierExpr):
+            return expr.name
+        return None
+
+    def _function_prefix(self, decl: FunctionDecl) -> str:
+        """Build a C prefix string for function-level attributes/macros."""
+        parts: List[str] = []
+        region_arg = self._get_annotation_arg(decl.annotations, 'region', 'value')
+        region_literal = self._emit_annotation_literal(region_arg)
+        if region_literal:
+            parts.append(f"BASIS_REGION({region_literal})")
+        if self._has_annotation(decl.annotations, 'inline'):
+            parts.append("static inline")
+        if self._has_annotation(decl.annotations, 'task'):
+            parts.append("BASIS_TASK")
+        if self._has_annotation(decl.annotations, 'interrupt'):
+            parts.append("BASIS_INTERRUPT")
+        return (" ".join(parts) + " ") if parts else ""
     
     def _emit_function_declaration(self, decl: FunctionDecl):
         """Emit function declaration."""
@@ -239,12 +273,7 @@ class CCodeGenerator:
         
         return_type = self._emit_type(decl.return_type)
         params = self._emit_params(decl.params)
-        
-        prefix = ""
-        if self._has_annotation(decl.annotations, 'inline'):
-            prefix = "static inline "
-        if self._has_annotation(decl.annotations, 'interrupt'):
-            prefix += "BASIS_INTERRUPT "
+        prefix = self._function_prefix(decl)
         
         self._emit_line(f"{prefix}{return_type} {decl.name}({params});")
     
@@ -252,12 +281,7 @@ class CCodeGenerator:
         """Emit function definition."""
         return_type = self._emit_type(decl.return_type)
         params = self._emit_params(decl.params)
-        
-        prefix = ""
-        if self._has_annotation(decl.annotations, 'inline'):
-            prefix = "static inline "
-        if self._has_annotation(decl.annotations, 'interrupt'):
-            prefix += "BASIS_INTERRUPT "
+        prefix = self._function_prefix(decl)
         
         self._emit_line(f"{prefix}{return_type} {decl.name}({params}) {{")
         self.indent_level += 1

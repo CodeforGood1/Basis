@@ -1,0 +1,6 @@
+#[max_memory(4kb)]
+
+@region(1 + 2)
+public fn worker() -> void {
+    return;
+}

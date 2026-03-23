@@ -1,0 +1,8 @@
+#[max_memory(4kb)]
+#[max_task_stack(1kb)]
+
+@task(stack=256)
+@interrupt
+public fn worker() -> void {
+    return;
+}

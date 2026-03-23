@@ -243,6 +243,8 @@ class TypeChecker:
         elif isinstance(type_node, ASTVolatileType):
             base = self._resolve_type(type_node.base_type)
             if base:
+                if isinstance(base, PointerType):
+                    return VolatilePointerType(base.pointee)
                 return VolatilePointerType(base)
             return None
         
@@ -874,7 +876,7 @@ class TypeChecker:
             return None
         
         # Operand must be pointer
-        if not isinstance(operand_type, PointerType):
+        if not isinstance(operand_type, (PointerType, VolatilePointerType)):
             self._error("E_TYPE_MISMATCH",
                        f"cannot dereference non-pointer type {self._type_to_string(operand_type)}",
                        expr.operand.span)
@@ -1048,8 +1050,8 @@ class TypeChecker:
             return target_type
         
         # Allow pointer <-> pointer
-        src_ptr = isinstance(source_type, PointerType)
-        tgt_ptr = isinstance(target_type, PointerType)
+        src_ptr = isinstance(source_type, (PointerType, VolatilePointerType))
+        tgt_ptr = isinstance(target_type, (PointerType, VolatilePointerType))
         if src_ptr and tgt_ptr:
             return target_type
         
@@ -1123,7 +1125,7 @@ class TypeChecker:
         elif isinstance(t, StructType):
             return t.name
         elif isinstance(t, VolatilePointerType):
-            return f'volatile {self._type_to_string(t.pointee)}'
+            return f'volatile *{self._type_to_string(t.pointee)}'
         return '<unknown>'
     
     def _error(self, code: str, message: str, span: SourceSpan):

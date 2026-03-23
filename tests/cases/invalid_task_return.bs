@@ -1,0 +1,7 @@
+#[max_memory(4kb)]
+#[max_task_stack(1kb)]
+
+@task(stack=256)
+public fn worker() -> i32 {
+    return 1;
+}

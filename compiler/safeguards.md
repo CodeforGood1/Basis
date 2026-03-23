@@ -1,47 +1,48 @@
-# BASIS v1.0 — Safety Guarantees & Safeguards
+# BASIS v1.0 - Safety Guarantees & Safeguards
 
-> How BASIS ensures resource safety and deterministic execution at compile time.
+> How BASIS enforces determinism and bounded resource use at compile time.
 
 ## Core Philosophy
 
-BASIS is designed for **embedded systems** where:
-- Memory is scarce and precious
-- Runtime failures are catastrophic  
-- Predictable execution is mandatory
-- Every byte must be accounted for
+BASIS is designed for embedded systems where:
+- memory is scarce
+- runtime failures are expensive
+- predictable execution matters more than expressive freedom
+- foreign-function boundaries must be made explicit
 
-**All safety checks happen at compile time — zero runtime overhead.**
+The compiler is intentionally opinionated: it would rather reject code early
+than let uncertainty survive into firmware.
 
 ---
 
-## Memory Budget Enforcement
+## Resource Budgets
 
-### The `#[max_memory(SIZE)]` Directive
-
-Every BASIS file must declare its maximum memory budget upfront:
+Every BASIS file must declare:
 
 ```basis
-#[max_memory(256kb)]  // For Arduino Uno (32KB RAM, but 256KB program space)
-
-fn process_sensor() -> i32 {
-    // Compiler ensures this module's usage fits within 256KB
-    return 0;
-}
+#[max_memory(256kb)]
 ```
 
-### Why Every File?
+Optional module profiles can also declare:
 
-BASIS cannot express infinite loops, making it unsuitable for top-level scheduling. Embedded applications typically use C for main loops and scheduling, calling BASIS functions for deterministic tasks. Each BASIS module declares its budget so the C linker can account for total system resources.
+```basis
+#[strict]
+#[max_storage(4kb)]
+#[max_storage_objects(16)]
+#[max_task_stack(8kb)]
+```
 
 ### What Gets Counted
 
-| Component | Description | How Measured |
-|-----------|-------------|--------------|
-| **Stack** | Local variables, function frames | Sum of all local variable sizes × call depth |
-| **Heap** | Dynamic allocations | Sum of all `alloc_*` call arguments |
-| **Code** | Generated instructions | Estimated from AST complexity |
+| Component | Description |
+|-----------|-------------|
+| `Stack` | Deepest reachable call-path stack usage |
+| `Heap` | Bounded dynamic allocation tracked through calls and loops |
+| `Task stack` | Sum of all `@task(stack=N)` reservations |
+| `Storage use` | Persistent bytes and object counts from `@storage(...)` |
+| `Code (~)` | Estimated generated code size |
 
-### Compile-Time Validation
+### Example Output
 
 ```
 ======================================================================
@@ -49,345 +50,192 @@ RESOURCE ANALYSIS
 ======================================================================
 
 Program Size Summary:
-  Stack (max):         20 bytes
-  Heap (total):       512 bytes
-  Code (~):           700 bytes
+  Stack (max):         68 bytes
+  Heap (total):         0 bytes
+  Task stack:        1024 bytes
+  Storage use:        512 bytes / 4 objects
+  Code (~):           300 bytes
   -------------------------------
-  TOTAL:             1232 bytes (1.20 KB)
+  TOTAL:             1392 bytes (1.36 KB)
+  Deepest path:  main -> persist_batch -> append_log
 ======================================================================
-
-Memory Budget: 1232/262144 bytes (0.5% used)
-Remaining:     260912 bytes (254.80 KB)
-[OK] Program fits within declared memory budget
 ```
 
-### Budget Violation Detection
-
-If the program exceeds its budget:
-
-```
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-ERROR: Program exceeds declared memory budget!
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-  Declared max_memory:      512 bytes (0.50 KB)
-  Actual program size:     1232 bytes (1.20 KB)
-  Overflow:                 720 bytes
-
-Either reduce program size or increase #[max_memory(SIZE)].
-```
+If a program exceeds `#[max_memory(...)]`, `#[max_storage(...)]`,
+`#[max_storage_objects(...)]`, or `#[max_task_stack(...)]`, compilation fails.
 
 ---
 
-## Array Bounds Checking
+## Deterministic Control Flow
 
-### Compile-Time Bounds Verification
+- `while` loops are rejected outright with `E_WHILE_REMOVED`
+- `for` loops must have provable bounds
+- recursion is allowed only with `@recursion(max=N)`
+- recursive cycles must agree on the same recursion depth
 
-BASIS verifies all array accesses at compile time:
-
-```basis
-let arr: [i32; 5] = [1, 2, 3, 4, 5];
-
-let valid: i32 = arr[4];   // OK: index 4 < size 5
-let invalid: i32 = arr[10]; // ERROR: index 10 >= size 5
-```
-
-**Error:**
-```
-error: array index 10 is out of bounds for array of size 5 [E_INDEX_OUT_OF_BOUNDS]
-```
-
-### Works Across Modules
-
-Bounds checking works even with imported functions:
-
-```basis
-import core::*;  // Imports clamp_i32, etc.
-
-let arr: [i32; 5] = [1, 2, 3, 4, 5];
-let idx: i32 = clamp_i32(user_input, 0, 4);  // Clamped to valid range
-let safe: i32 = arr[idx];  // Compiler knows idx ∈ [0, 4]
-```
+This keeps termination and stack growth analyzable.
 
 ---
 
-## Recursion Control
+## Heap Safety
 
-### Mandatory Depth Annotation
+- heap allocation sizes must be compile-time constants or bounded parameters
+- heap usage is multiplied across bounded loops
+- recursive functions cannot allocate heap memory
+- generic foreign allocators must declare `@allocates(max=N)`
 
-Recursive functions **must** declare maximum recursion depth:
-
-```basis
-@recursion(max=10)
-fn factorial(n: i32) -> i32 {
-    if n <= 1 {
-        return 1;
-    }
-    return n * factorial(n - 1);
-}
-```
-
-### Stack Calculation with Recursion
-
-The compiler multiplies stack usage by recursion depth:
-
-```
-fn factorial: stack=8 bytes × max_depth=10 = 80 bytes total
-```
-
-### Missing Annotation Error
+Example:
 
 ```basis
-fn fibonacci(n: i32) -> i32 {
-    if n <= 1 { return n; }
-    return fibonacci(n - 1) + fibonacci(n - 2);
-}
-```
-
-**Error:**
-```
-error: recursive function 'fibonacci' missing @recursion(max=N) annotation 
-       (cycle: fibonacci -> fibonacci) [E_MISSING_RECURSION_ANNOTATION]
-```
-
----
-
-## Loop Termination
-
-### Bounded Loops Required
-
-All loops must have provable termination:
-
-```basis
-// OK: Bounded for loop
-for i in 0..100 {
-    process(i);
-}
-```
-
-### While Loops Are Rejected
-
-```basis
-// ERROR: BASIS no longer accepts while loops
-while count > 0 {
-    count = count - 1;
-}
-```
-
-**Error:**
-```
-error: while loops are not part of BASIS [E_WHILE_REMOVED]
-```
-
-Use a bounded `for` loop or recursion with `@recursion(max=N)` instead.
-
----
-
-## Heap Allocation Tracking
-
-### Allocation Size Must Be Known
-
-All heap allocations must have compile-time known sizes:
-
-```basis
-import mem::*;
-
-// OK: Constant size
-let buf: *u8 = alloc_bytes(256 as u32);
-
-// OK: Compile-time constant
-const BUFFER_SIZE: u32 = 1024;
-let data: *u8 = alloc_bytes(BUFFER_SIZE);
-
-// ERROR: Runtime-determined size
-let dynamic: *u8 = alloc_bytes(user_input);  // Not allowed!
-```
-
-### Heap in Loops
-
-Allocations inside loops are multiplied by loop bound:
-
-```basis
-for i in 0..10 {
-    let ptr: *u8 = alloc_bytes(100 as u32);  // 100 × 10 = 1000 bytes heap
-    // ...
-    free_bytes(ptr);
-}
-```
-
-## Foreign Call Effect Contracts
-
-Extern calls are not treated as opaque anymore. Each `extern fn` must declare:
-- `@stack(N)` for call-graph stack budgeting
-- exactly one of `@deterministic` or `@nondeterministic`
-
-Optional effect refinements:
-- `@blocking` for calls that may wait or stall
-- `@allocates(max=N)` for generic foreign allocators
-- `@isr_safe` for deterministic, non-blocking, non-allocating foreign calls
-
-```basis
-@deterministic @isr_safe @stack(32) extern fn board_crc(seed: u32) -> u32;
-@nondeterministic @blocking @stack(64) extern fn read_i32() -> i32;
 @deterministic @allocates(max=96) @stack(48) extern fn reserve_dma() -> *u8;
 ```
 
-These effects propagate through the same whole-program call graph used for stack analysis, so the compiler can reject interrupt handlers that call non-deterministic, blocking, or heap-allocating foreign code.
+---
+
+## Persistent Storage Budgeting
+
+Persistent storage is tracked separately from heap because long-running systems
+often fail from log growth, object creation, or other state accumulation that
+is not ordinary RAM allocation.
+
+Use:
+
+```basis
+#[max_storage(4kb)]
+#[max_storage_objects(16)]
+
+@deterministic
+@storage(max_bytes=128, max_objects=1)
+@stack(64)
+extern fn append_log(record_id: u32) -> void;
+```
+
+The compiler propagates storage use through the whole-program call graph and
+multiplies it through bounded loops.
+
+Interrupt handlers and strict modules cannot use persistent storage.
+
+---
+
+## Foreign-Function Effect Contracts
+
+Every `extern fn` must declare:
+- `@stack(N)`
+- exactly one of `@deterministic` or `@nondeterministic`
+
+Optional refinements:
+- `@blocking`
+- `@allocates(max=N)`
+- `@storage(max_bytes=N, max_objects=N)`
+- `@reentrant`
+- `@uses_timer`
+- `@may_fail`
+- `@isr_safe`
+
+Example:
+
+```basis
+@deterministic @reentrant @isr_safe @stack(32) extern fn board_crc(seed: u32) -> u32;
+@nondeterministic @blocking @stack(64) extern fn read_i32() -> i32;
+@deterministic @storage(max_bytes=128, max_objects=1) @stack(64) extern fn append_log(id: u32) -> void;
+```
+
+These effects propagate through the same call graph used for stack analysis.
+
+---
+
+## Interrupt Safety
+
+`@interrupt` functions must:
+- be `public`
+- return `void`
+- take no parameters
+- not be `extern`
+- not be recursive
+- not allocate heap
+- not use persistent storage
+- call only deterministic, ISR-safe, reentrant code
+- not call blocking code
+
+Violations surface as errors such as:
+- `E_INTERRUPT_SIGNATURE`
+- `E_INTERRUPT_HEAP`
+- `E_INTERRUPT_STORAGE`
+- `E_INTERRUPT_BLOCKING`
+- `E_INTERRUPT_NONDETERMINISTIC`
+- `E_INTERRUPT_UNSAFE_CALL`
+- `E_INTERRUPT_REENTRANCY`
+
+---
+
+## Task Entry Points
+
+`@task(stack=N, priority=M)` marks a function as a runtime task entry point.
+
+Compile-time checks enforce that task functions:
+- are `public`
+- return `void`
+- take no parameters
+- are not recursive
+- declare an explicit stack budget
+- are not also marked `@interrupt`
+
+Task stacks are tracked separately and can be bounded with `#[max_task_stack(...)]`.
+
+---
+
+## Strict Modules
+
+`#[strict]` defines a tighter deterministic profile for a module.
+
+Strict modules reject:
+- nondeterministic calls
+- blocking calls
+- heap allocation
+- persistent storage usage
+
+This is useful for control logic that needs a harder guarantee boundary than
+the default BASIS profile.
+
+---
+
+## Time and MMIO Support
+
+The standard library now includes:
+- `time` for rollover-safe tick/deadline helpers
+- `mmio` for typed `volatile` register access helpers
+
+Example:
+
+```basis
+import time::*;
+
+let deadline: u32 = deadline_from_u32(0xFFFF_FFF0 as u32, 32 as u32);
+let reached: bool = deadline_reached_u32(0x0000_0008 as u32, deadline);
+```
+
+```basis
+import mmio::*;
+
+let gpio_out: volatile *u32 = 0x3FF44004 as volatile *u32;
+write32(gpio_out, 1 as u32);
+```
 
 ---
 
 ## Type Safety
 
-### Explicit Type Annotations
-
-All variables must have explicit types:
-
-```basis
-let x: i32 = 42;        // OK
-let y = 42;             // ERROR: Type annotation required
-```
-
-### Type Mismatch Detection
-
-```basis
-fn process(value: u32) -> void { }
-
-let x: i32 = 10;
-process(x);  // ERROR: expected u32, got i32
-process(x as u32);  // OK: explicit cast
-```
-
-### Pointer Type Safety
-
-```basis
-let ptr_i32: *i32 = get_data();
-let ptr_u8: *u8 = ptr_i32;  // ERROR: pointer type mismatch
-let ptr_u8: *u8 = ptr_i32 as *u8;  // OK: explicit cast
-```
+- explicit type annotations on variables
+- compile-time type checking for expressions and returns
+- no array returns by value
+- explicit casts for representation changes
+- compile-time and runtime array bounds enforcement where applicable
 
 ---
 
-## Missing Directive Detection
+## Summary
 
-### All Modules Require Memory Directive
-
-Every BASIS file must have the memory directive:
-
-```basis
-// Missing #[max_memory(SIZE)] directive!
-
-fn process_data(x: i32) -> i32 {
-    return x * 2;
-}
-```
-
-**Error:**
-```
-error: missing #[max_memory(SIZE)] directive in module(s):
-  - my_module
-
-BASIS requires explicit memory budget declaration in EVERY file.
-This allows BASIS modules to be linked with C code for scheduling/control.
-Add at the top of each file: #[max_memory(SIZE)]  // e.g. #[max_memory(4kb)]
-```
-
-### Library Mode
-
-Use `--lib` flag to compile BASIS modules without `main()` for linking with C:
-
-```bash
-basis build --lib sensor_driver.bs motor_control.bs --emit-c
-```
-
-This generates C files that can be linked with your C scheduler/main loop.
-
----
-
-## Return Value Checking
-
-### All Paths Must Return
-
-Functions with non-void return types must return a value on **all** code paths:
-
-```basis
-fn classify(x: i32) -> i32 {
-    if x > 0 {
-        return 1;
-    }
-    // ERROR: missing return when x <= 0
-}
-```
-
-**Error:**
-```
-error: function 'classify' must return a value of type i32 on all code paths [E_MISSING_RETURN]
-```
-
-### Correct Patterns
-
-```basis
-// Pattern 1: Return on all branches
-fn classify(x: i32) -> i32 {
-    if x > 0 {
-        return 1;
-    } else {
-        return -1;
-    }
-}
-
-// Pattern 2: Final return catches fall-through
-fn classify(x: i32) -> i32 {
-    if x > 0 {
-        return 1;
-    }
-    return -1;  // Catches all other cases
-}
-
-// Pattern 3: elif chain with final else
-fn grade(score: i32) -> i32 {
-    if score >= 90 {
-        return 5;
-    } elif score >= 80 {
-        return 4;
-    } elif score >= 70 {
-        return 3;
-    } else {
-        return 2;
-    }
-}
-```
-
----
-
-## Summary of Safety Checks
-
-| Check | When | Error Code |
-|-------|------|------------|
-| Memory budget | Link time | `Program exceeds declared memory budget` |
-| Array bounds | Type check | `E_INDEX_OUT_OF_BOUNDS` |
-| Missing return | Type check | `E_MISSING_RETURN` |
-| Recursion depth | Semantic analysis | `E_MISSING_RECURSION_ANNOTATION` |
-| Loop termination | Semantic analysis | `E_UNBOUNDED_LOOP` |
-| Heap size known | Resource analysis | `E_UNBOUNDED_HEAP` |
-| Extern effect contract | Resource analysis | `E_EXTERN_EFFECT_REQUIRED` |
-| Foreign allocator budget | Resource analysis | `E_EXTERN_ALLOCATES_BUDGET_REQUIRED` |
-| Type matching | Type check | `E_TYPE_MISMATCH` |
-| Memory directive | Parse/compile | `missing #[max_memory(SIZE)] directive` |
-
----
-
-## Safety Guarantees
-
-With BASIS, you get **compile-time guarantees** that:
-
-1. **No stack overflow** — Stack usage bounded and known
-2. **No heap overflow** — All allocations tracked against budget  
-3. **No buffer overflows** — Array bounds checked statically
-4. **No infinite loops** — All loops provably terminate
-5. **No runaway recursion** — Recursion depth declared and enforced
-6. **No type confusion** — Explicit types, explicit casts
-7. **No hidden allocations** — All memory usage visible in source
-8. **No hidden blocking across externs** — `@blocking` propagates through the call graph
-9. **No missing returns** — All code paths return proper values
-
-**If it compiles, it fits in memory.**
+BASIS is not trying to be a fully unrestricted systems language. Its safety
+model comes from restricting the language until stack usage, heap usage,
+persistent storage, interrupts, tasks, and foreign-call behavior are all more
+visible at compile time.

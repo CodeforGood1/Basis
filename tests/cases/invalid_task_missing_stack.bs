@@ -1,0 +1,7 @@
+#[max_memory(4kb)]
+#[max_task_stack(1kb)]
+
+@task(priority=2)
+public fn worker() -> void {
+    return;
+}

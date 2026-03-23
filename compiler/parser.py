@@ -18,6 +18,11 @@ from ast_defs import (
 
 class Parser:
     """Recursive descent parser for BASIS."""
+
+    _MEMORY_DIRECTIVES = {"max_memory", "max_storage", "max_task_stack"}
+    _INTEGER_DIRECTIVES = {"max_storage_objects"}
+    _BOOLEAN_DIRECTIVES = {"strict"}
+    _KNOWN_DIRECTIVES = _MEMORY_DIRECTIVES | _INTEGER_DIRECTIVES | _BOOLEAN_DIRECTIVES
     
     def __init__(self, tokens, filename="<input>", diag_engine=None):
         self.tokens = tokens
@@ -117,6 +122,14 @@ class Parser:
                 return
             
             self.advance()
+
+    def recover_directive(self):
+        """Skip tokens until the end of the current directive."""
+        while not self.at_eof():
+            if self.match(TokenType.RBRACKET):
+                self.advance()
+                return
+            self.advance()
     
     # ========================================================================
     # Top-Level Parsing
@@ -126,22 +139,24 @@ class Parser:
         """Parse entire module."""
         declarations = []
         max_memory_bytes = None
+        directives = {}
         
         # Parse optional module-level directives first
         while self.match(TokenType.HASH):
             directive_result = self._parse_directive()
             if directive_result:
                 directive_name, directive_value = directive_result
-                if directive_name == "max_memory":
-                    if max_memory_bytes is not None:
-                        token = self.current()
-                        self.diag.error(
-                            'ERR_PARSE_DUPLICATE_DIRECTIVE',
-                            "duplicate #[max_memory] directive",
-                            token.line, token.column, 1,
-                            self.filename
-                        )
-                    else:
+                if directive_name in directives:
+                    token = self.current()
+                    self.diag.error(
+                        'ERR_PARSE_DUPLICATE_DIRECTIVE',
+                        f"duplicate #[{directive_name}] directive",
+                        token.line, token.column, 1,
+                        self.filename
+                    )
+                else:
+                    directives[directive_name] = directive_value
+                    if directive_name == "max_memory":
                         max_memory_bytes = directive_value
         
         while not self.at_eof():
@@ -150,7 +165,7 @@ class Parser:
                 token = self.current()
                 self.diag.error(
                     'ERR_PARSE_DIRECTIVE_POSITION',
-                    "#[max_memory] directive must appear at the start of the file",
+                    "module directives must appear at the start of the file",
                     token.line, token.column, 1,
                     self.filename
                 )
@@ -183,7 +198,7 @@ class Parser:
         else:
             span = SourceSpan(1, 1, 1, 1)
         
-        return Module(span, module_name, declarations, max_memory_bytes)
+        return Module(span, module_name, declarations, max_memory_bytes, directives)
     
     def _parse_directive(self):
         """Parse a #[directive(value)] construct. Returns (name, value) or None."""
@@ -213,43 +228,66 @@ class Parser:
             return None
         
         directive_name = name_token.lexeme
-        
-        # Expect (value)
-        if not self.consume(TokenType.LPAREN):
-            token = self.current()
+        if directive_name not in self._KNOWN_DIRECTIVES:
             self.diag.error(
                 'ERR_PARSE_DIRECTIVE',
-                f"expected '(' after directive name '{directive_name}'",
-                token.line, token.column, 1,
+                f"unknown directive '#[{directive_name}]'",
+                name_token.line, name_token.column, name_token.length,
                 self.filename
             )
+            self.recover_directive()
             return None
         
-        # Parse the value - for max_memory, expect a size like 256kb or 1mb
-        value_token = self.current()
-        if not self.match(TokenType.INTEGER, TokenType.IDENTIFIER):
-            self.diag.error(
-                'ERR_PARSE_DIRECTIVE',
-                f"expected size value in directive",
-                value_token.line, value_token.column, 1,
-                self.filename
-            )
-            return None
-        
-        # Parse size value
-        directive_value = self._parse_memory_size()
-        if directive_value is None:
-            return None
-        
-        if not self.consume(TokenType.RPAREN):
-            token = self.current()
-            self.diag.error(
-                'ERR_PARSE_DIRECTIVE',
-                "expected ')' after directive value",
-                token.line, token.column, 1,
-                self.filename
-            )
-            return None
+        if directive_name in self._BOOLEAN_DIRECTIVES:
+            directive_value = True
+            if self.consume(TokenType.LPAREN):
+                directive_value = self._parse_boolean_directive_value(directive_name)
+                if directive_value is None:
+                    self.recover_directive()
+                    return None
+                if not self.consume(TokenType.RPAREN):
+                    token = self.current()
+                    self.diag.error(
+                        'ERR_PARSE_DIRECTIVE',
+                        "expected ')' after directive value",
+                        token.line, token.column, 1,
+                        self.filename
+                    )
+                    self.recover_directive()
+                    return None
+        else:
+            if not self.consume(TokenType.LPAREN):
+                token = self.current()
+                self.diag.error(
+                    'ERR_PARSE_DIRECTIVE',
+                    f"expected '(' after directive name '{directive_name}'",
+                    token.line, token.column, 1,
+                    self.filename
+                )
+                self.recover_directive()
+                return None
+
+            if directive_name in self._MEMORY_DIRECTIVES:
+                directive_value = self._parse_memory_size()
+            elif directive_name in self._INTEGER_DIRECTIVES:
+                directive_value = self._parse_integer_directive_value(directive_name)
+            else:
+                directive_value = None
+
+            if directive_value is None:
+                self.recover_directive()
+                return None
+
+            if not self.consume(TokenType.RPAREN):
+                token = self.current()
+                self.diag.error(
+                    'ERR_PARSE_DIRECTIVE',
+                    "expected ')' after directive value",
+                    token.line, token.column, 1,
+                    self.filename
+                )
+                self.recover_directive()
+                return None
         
         if not self.consume(TokenType.RBRACKET):
             token = self.current()
@@ -259,9 +297,51 @@ class Parser:
                 token.line, token.column, 1,
                 self.filename
             )
+            self.recover_directive()
             return None
         
         return (directive_name, directive_value)
+
+    def _parse_integer_directive_value(self, directive_name):
+        token = self.current()
+        if not self.match(TokenType.INTEGER):
+            self.diag.error(
+                'ERR_PARSE_DIRECTIVE',
+                f"expected integer value in #[{directive_name}]",
+                token.line, token.column, token.length,
+                self.filename
+            )
+            return None
+
+        value_token = self.advance()
+        value = int(value_token.lexeme)
+        if value <= 0:
+            self.diag.error(
+                'ERR_PARSE_DIRECTIVE',
+                f"#[{directive_name}] value must be positive",
+                value_token.line, value_token.column, value_token.length,
+                self.filename
+            )
+            return None
+        return value
+
+    def _parse_boolean_directive_value(self, directive_name):
+        token = self.current()
+        if self.match(TokenType.IDENTIFIER):
+            value_token = self.advance()
+            value = value_token.lexeme.lower()
+            if value in ("on", "true", "yes", "enabled", "1"):
+                return True
+            if value in ("off", "false", "no", "disabled", "0"):
+                return False
+
+        self.diag.error(
+            'ERR_PARSE_DIRECTIVE',
+            f"expected boolean value in #[{directive_name}] (on/off)",
+            token.line, token.column, token.length,
+            self.filename
+        )
+        return None
     
     def _parse_memory_size(self):
         """Parse a memory size like 256kb, 1mb, 2048. Returns bytes as int."""

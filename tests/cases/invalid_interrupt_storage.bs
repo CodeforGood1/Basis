@@ -1,0 +1,8 @@
+#[max_memory(4kb)]
+
+@deterministic @storage(max_bytes=64, max_objects=1) @stack(32) extern fn append_log() -> void;
+
+@interrupt
+public fn irq_handler() -> void {
+    append_log();
+}

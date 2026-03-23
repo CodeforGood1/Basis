@@ -1,0 +1,27 @@
+// BASIS Standard Library - Time and rollover-safe tick helpers
+
+// Return the unsigned elapsed distance between two tick values.
+@uses_timer
+public fn elapsed_u32(start: u32, end: u32) -> u32 {
+    return end - start;
+}
+
+// Build a deadline that remains safe across u32 wraparound.
+@uses_timer
+public fn deadline_from_u32(now: u32, delay: u32) -> u32 {
+    return now + delay;
+}
+
+// Return true when now is at or after deadline using wrap-safe comparison.
+@uses_timer
+public fn deadline_reached_u32(now: u32, deadline: u32) -> bool {
+    let delta: i32 = (now - deadline) as i32;
+    return delta >= 0;
+}
+
+// Return true when a occurs before b using wrap-safe comparison.
+@uses_timer
+public fn before_u32(a: u32, b: u32) -> bool {
+    let delta: i32 = (a - b) as i32;
+    return delta < 0;
+}

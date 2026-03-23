@@ -8,6 +8,10 @@ Every BASIS source file is a module. The general structure is:
 
 ```basis
 #[max_memory(SIZE)]     // Required in ALL BASIS files
+#[strict]              // Optional strict deterministic profile
+#[max_storage(SIZE)]   // Optional persistent storage byte budget
+#[max_storage_objects(N)] // Optional persistent object budget
+#[max_task_stack(SIZE)]   // Optional total task stack budget
 
 import module::*;       // Import declarations
 import module::{item};  // Named imports
@@ -28,6 +32,10 @@ BASIS cannot express infinite loops, so embedded applications typically use C fo
 ### Syntax
 ```basis
 #[max_memory(SIZE)]
+#[strict]
+#[max_storage(SIZE)]
+#[max_storage_objects(N)]
+#[max_task_stack(SIZE)]
 ```
 
 ### Size Formats
@@ -61,10 +69,12 @@ import math::{abs_i32, max_i32};  // Import specific symbols
 ```
 
 ### Standard Library Modules
-- `core` — Fundamental operations (abs, min, max, clamp)
-- `mem` — Heap allocation (alloc_bytes, free_bytes, alloc_i32)
-- `io` — Basic output (print, println, out_i32, out_u32)
-- `math` — Advanced math (square, cube, power, is_even, sign)
+- `core` - Fundamental operations (abs, min, max, clamp)
+- `mem` - Heap allocation (alloc_bytes, free_bytes, alloc_i32)
+- `io` - Basic output (print, println, out_i32, out_u32)
+- `math` - Advanced math (square, cube, power, is_even, sign)
+- `time` - Rollover-safe tick/deadline helpers
+- `mmio` - Volatile register access helpers
 
 ---
 
@@ -143,7 +153,26 @@ fn fill_data(out: *u8) -> void { ... }      // Use out parameter
 ```
 
 Every `extern fn` must declare `@stack(N)` and exactly one determinism contract: `@deterministic` or `@nondeterministic`.
-`@blocking`, `@allocates(max=N)`, and `@isr_safe` are optional effect refinements.
+`@blocking`, `@allocates(max=N)`, `@storage(...)`, `@reentrant`, `@uses_timer`, `@may_fail`, and `@isr_safe` are optional effect refinements.
+
+### Task Functions
+```basis
+@task(stack=1024, priority=2)
+@region("iram")
+public fn telemetry_task() -> void {
+    // Bound by the same call-graph/resource analysis as any other function
+}
+```
+
+`@task` functions must be `public`, return `void`, take no parameters, and declare `stack=N`.
+
+### Interrupt Functions
+```basis
+@interrupt
+public fn systick_handler() -> void {
+    // Deterministic, heap-free, storage-free, ISR-safe code only
+}
+```
 
 ### Structs
 ```basis
@@ -198,6 +227,7 @@ false       // bool
 let x: i32 = 256;
 let y: u32 = x as u32;      // Cast i32 to u32
 let ptr: *i32 = raw as *i32; // Cast to pointer
+let reg: volatile *u32 = 0x3FF44004 as volatile *u32; // MMIO register address
 ```
 
 ### Array Literals and Initialization

@@ -109,6 +109,12 @@ class ModuleCodeGenerator:
         lines.append("#ifndef BASIS_INTERRUPT")
         lines.append("#define BASIS_INTERRUPT")
         lines.append("#endif")
+        lines.append("#ifndef BASIS_TASK")
+        lines.append("#define BASIS_TASK")
+        lines.append("#endif")
+        lines.append("#ifndef BASIS_REGION")
+        lines.append("#define BASIS_REGION(name)")
+        lines.append("#endif")
         lines.append("")
         
         # Extract public declarations only
@@ -158,6 +164,12 @@ class ModuleCodeGenerator:
         lines.append("#include <string.h>")
         lines.append("#ifndef BASIS_INTERRUPT")
         lines.append("#define BASIS_INTERRUPT")
+        lines.append("#endif")
+        lines.append("#ifndef BASIS_TASK")
+        lines.append("#define BASIS_TASK")
+        lines.append("#endif")
+        lines.append("#ifndef BASIS_REGION")
+        lines.append("#define BASIS_REGION(name)")
         lines.append("#endif")
         lines.append("")
         
@@ -226,9 +238,13 @@ class ModuleCodeGenerator:
                     continue
                 return_type = gen._emit_type(decl.return_type)
                 params = gen._emit_params(decl.params)
+                prefix = gen._function_prefix(decl)
                 # Use static only if not public and not in export_all mode
                 if decl.visibility != 'public' and not self.export_all:
-                    gen._emit_line(f"static {return_type} {decl.name}({params});")
+                    if prefix.startswith("static "):
+                        gen._emit_line(f"{prefix}{return_type} {decl.name}({params});")
+                    else:
+                        gen._emit_line(f"static {prefix}{return_type} {decl.name}({params});")
                 # Public/exported functions already declared in header
         
         if any(isinstance(d, FunctionDecl) and not d.is_extern for d in module.declarations):
@@ -265,21 +281,24 @@ class ModuleCodeGenerator:
         gen = CCodeGenerator()
         return_type = gen._emit_type(decl.return_type)
         params = gen._emit_params(decl.params)
-        prefix = "BASIS_INTERRUPT " if gen._has_annotation(decl.annotations, 'interrupt') else ""
+        prefix = gen._function_prefix(decl)
         return f"{prefix}{return_type} {decl.name}({params});"
     
     def _emit_function_impl(self, gen: CCodeGenerator, decl: FunctionDecl):
         """Emit function implementation using existing generator."""
         return_type = gen._emit_type(decl.return_type)
         params = gen._emit_params(decl.params)
-        interrupt_prefix = "BASIS_INTERRUPT " if gen._has_annotation(decl.annotations, 'interrupt') else ""
+        prefix = gen._function_prefix(decl)
         
         # Add static for private functions (but never for main or in export_all mode)
         is_private = decl.visibility != 'public' and not self.export_all
         if is_private and decl.name != 'main':
-            gen._emit_line(f"static {interrupt_prefix}{return_type} {decl.name}({params}) {{")
+            if prefix.startswith("static "):
+                gen._emit_line(f"{prefix}{return_type} {decl.name}({params}) {{")
+            else:
+                gen._emit_line(f"static {prefix}{return_type} {decl.name}({params}) {{")
         else:
-            gen._emit_line(f"{interrupt_prefix}{return_type} {decl.name}({params}) {{")
+            gen._emit_line(f"{prefix}{return_type} {decl.name}({params}) {{")
         
         gen.indent_level += 1
         

@@ -55,12 +55,19 @@ class FunctionResource:
     frame_stack_bytes: int
     stack_bytes: int
     heap_bytes: int
+    storage_bytes: int
+    storage_objects: int
     recursion_depth: Optional[int]
     deterministic: bool
     isr_safe: bool
     blocking: bool
     allocates: bool
+    may_fail: bool
+    uses_timer: bool
+    reentrant: bool
     is_interrupt: bool
+    is_task: bool
+    task_stack_bytes: int
     call_path: List[str] = field(default_factory=list)
 
 
@@ -77,12 +84,22 @@ class FunctionInfo:
     stack_bytes: int = 0
     local_heap_bytes: int = 0
     total_heap_bytes: int = 0
+    local_storage_bytes: int = 0
+    total_storage_bytes: int = 0
+    local_storage_objects: int = 0
+    total_storage_objects: int = 0
     recursion_depth: Optional[int] = None
     deterministic: bool = True
     isr_safe: bool = False
     blocking: bool = False
     allocates: bool = False
+    may_fail: bool = False
+    uses_timer: bool = False
+    reentrant: bool = False
     is_interrupt: bool = False
+    is_task: bool = False
+    task_stack_bytes: int = 0
+    task_priority: Optional[int] = None
     direct_calls: Set[str] = field(default_factory=set)
     call_path: List[str] = field(default_factory=list)
 
@@ -109,6 +126,9 @@ class EffectSummary:
     isr_safe: bool
     blocking: bool
     allocates: bool
+    may_fail: bool
+    uses_timer: bool
+    reentrant: bool
 
 
 class CallGraph:
@@ -224,9 +244,13 @@ class ProgramResourceAnalyzer:
         self._component_stack_cache: Dict[int, Tuple[int, List[str]]] = {}
         self._component_effect_cache: Dict[int, EffectSummary] = {}
         self._heap_cache: Dict[str, int] = {}
+        self._storage_cache: Dict[str, Tuple[int, int]] = {}
 
         self.total_stack_bytes = 0
         self.total_heap_bytes = 0
+        self.total_storage_bytes = 0
+        self.total_storage_objects = 0
+        self.total_task_stack_bytes = 0
         self.deepest_stack_path: List[str] = []
 
     def analyze(self) -> bool:
@@ -239,10 +263,16 @@ class ProgramResourceAnalyzer:
         self._compute_local_heap_usage()
         self._validate_recursive_heap_usage()
         self._compute_total_heap_usage()
+        self._compute_local_storage_usage()
+        self._validate_recursive_storage_usage()
+        self._compute_total_storage_usage()
         self._validate_effect_contracts()
+        self._validate_codegen_annotations()
         self._compute_effects()
         self._validate_effect_assertions()
         self._validate_interrupts()
+        self._validate_tasks()
+        self._validate_module_profiles()
         self._apply_stack_budgets()
         self._finalize_resources()
         return not self.diag.has_errors()
@@ -267,6 +297,15 @@ class ProgramResourceAnalyzer:
     def get_total_heap(self) -> int:
         return self.total_heap_bytes
 
+    def get_total_storage_bytes(self) -> int:
+        return self.total_storage_bytes
+
+    def get_total_storage_objects(self) -> int:
+        return self.total_storage_objects
+
+    def get_total_task_stack(self) -> int:
+        return self.total_task_stack_bytes
+
     def get_deepest_stack_path(self) -> List[str]:
         return list(self.deepest_stack_path)
 
@@ -289,6 +328,7 @@ class ProgramResourceAnalyzer:
                     const_eval=self.const_evaluators[module_name],
                     loop_analyzer=self.loop_analyzers[module_name],
                     is_interrupt=self._has_annotation(decl.annotations, "interrupt"),
+                    is_task=self._has_annotation(decl.annotations, "task"),
                 )
                 self.functions[qualified_name] = info
                 self.call_graph.add_node(qualified_name)
@@ -515,6 +555,76 @@ class ProgramResourceAnalyzer:
         for qualified_name, info in self.functions.items():
             info.total_heap_bytes = self._heap_for_function(qualified_name, visiting=set())
 
+    def _compute_local_storage_usage(self):
+        for info in self.functions.values():
+            base_bytes, base_objects = self._storage_annotation_values(info)
+            info.local_storage_bytes = base_bytes
+            info.local_storage_objects = base_objects
+
+            if info.is_extern or not info.decl.body:
+                continue
+
+            body_bytes, body_objects = self._calculate_storage_usage(
+                info,
+                info.decl.body,
+                include_calls=False,
+                visiting={info.qualified_name},
+            )
+            info.local_storage_bytes += body_bytes
+            info.local_storage_objects += body_objects
+
+    def _validate_recursive_storage_usage(self):
+        for component in self.components:
+            if not component.is_recursive:
+                continue
+            for member in component.members:
+                info = self.functions[member]
+                if info.local_storage_bytes > 0 or info.local_storage_objects > 0:
+                    self._error(
+                        "E_RECURSIVE_STORAGE",
+                        f"recursive function '{info.name}' cannot use persistent storage",
+                        info.decl.span,
+                        info.module_name,
+                    )
+
+    def _compute_total_storage_usage(self):
+        for qualified_name, info in self.functions.items():
+            total_bytes, total_objects = self._storage_for_function(qualified_name, visiting=set())
+            info.total_storage_bytes = total_bytes
+            info.total_storage_objects = total_objects
+
+    def _storage_for_function(self, qualified_name: str, visiting: Set[str]) -> Tuple[int, int]:
+        if qualified_name in self._storage_cache:
+            return self._storage_cache[qualified_name]
+
+        if qualified_name in visiting:
+            return (0, 0)
+
+        info = self.functions[qualified_name]
+        base_bytes, base_objects = self._storage_annotation_values(info)
+        if info.is_extern:
+            result = (base_bytes, base_objects)
+            self._storage_cache[qualified_name] = result
+            return result
+
+        if not info.decl.body:
+            result = (base_bytes, base_objects)
+            self._storage_cache[qualified_name] = result
+            return result
+
+        body_bytes, body_objects = self._calculate_storage_usage(
+            info,
+            info.decl.body,
+            include_calls=True,
+            visiting=visiting | {qualified_name},
+        )
+        result = (
+            self._saturating_add(base_bytes, body_bytes),
+            self._saturating_add(base_objects, body_objects),
+        )
+        self._storage_cache[qualified_name] = result
+        return result
+
     def _heap_for_function(self, qualified_name: str, visiting: Set[str]) -> int:
         if qualified_name in self._heap_cache:
             return self._heap_cache[qualified_name]
@@ -557,6 +667,162 @@ class ProgramResourceAnalyzer:
             return budget or 0
 
         return 0
+
+    def _storage_annotation_values(self, info: FunctionInfo) -> Tuple[int, int]:
+        annotation = self._find_annotation(info.decl.annotations, "storage")
+        if annotation is None:
+            return (0, 0)
+
+        bytes_value = self._annotation_optional_int_value(
+            info, annotation, ("max_bytes", "bytes", "value")
+        )
+        objects_value = self._annotation_optional_int_value(
+            info, annotation, ("max_objects", "objects")
+        )
+        return (bytes_value or 0, objects_value or 0)
+
+    def _calculate_storage_usage(
+        self,
+        info: FunctionInfo,
+        node,
+        include_calls: bool,
+        visiting: Set[str],
+    ) -> Tuple[int, int]:
+        total_bytes = 0
+        total_objects = 0
+
+        if isinstance(node, Block):
+            for statement in node.statements:
+                bytes_used, objects_used = self._calculate_storage_usage(
+                    info, statement, include_calls, visiting
+                )
+                total_bytes = self._saturating_add(total_bytes, bytes_used)
+                total_objects = self._saturating_add(total_objects, objects_used)
+
+        elif isinstance(node, ForStmt):
+            loop_bound = info.loop_analyzer.get_loop_bound(node)
+            if not loop_bound:
+                self._error(
+                    "E_UNBOUNDED_LOOP",
+                    "for loop bound could not be determined during storage analysis",
+                    node.span,
+                    info.module_name,
+                )
+                return (0, 0)
+
+            body_bytes, body_objects = self._calculate_storage_usage(
+                info,
+                node.body,
+                include_calls,
+                visiting,
+            )
+            total_bytes = self._saturating_add(total_bytes, body_bytes * loop_bound.max_iterations)
+            total_objects = self._saturating_add(total_objects, body_objects * loop_bound.max_iterations)
+
+        elif isinstance(node, WhileStmt):
+            self._error(
+                "E_WHILE_REMOVED",
+                "while loops are not part of BASIS",
+                node.span,
+                info.module_name,
+            )
+
+        elif isinstance(node, IfStmt):
+            branch_bytes, branch_objects = self._calculate_storage_usage(
+                info,
+                node.then_block,
+                include_calls,
+                visiting,
+            )
+            for branch in node.elif_branches:
+                cand_bytes, cand_objects = self._calculate_storage_usage(
+                    info,
+                    branch.block,
+                    include_calls,
+                    visiting,
+                )
+                branch_bytes = max(branch_bytes, cand_bytes)
+                branch_objects = max(branch_objects, cand_objects)
+            if node.else_block:
+                cand_bytes, cand_objects = self._calculate_storage_usage(
+                    info,
+                    node.else_block,
+                    include_calls,
+                    visiting,
+                )
+                branch_bytes = max(branch_bytes, cand_bytes)
+                branch_objects = max(branch_objects, cand_objects)
+            total_bytes = self._saturating_add(total_bytes, branch_bytes)
+            total_objects = self._saturating_add(total_objects, branch_objects)
+
+        elif isinstance(node, ExprStmt):
+            bytes_used, objects_used = self._expr_storage(info, node.expression, include_calls, visiting)
+            total_bytes = self._saturating_add(total_bytes, bytes_used)
+            total_objects = self._saturating_add(total_objects, objects_used)
+
+        elif isinstance(node, LetDecl):
+            if node.initializer:
+                bytes_used, objects_used = self._expr_storage(
+                    info, node.initializer, include_calls, visiting
+                )
+                total_bytes = self._saturating_add(total_bytes, bytes_used)
+                total_objects = self._saturating_add(total_objects, objects_used)
+
+        elif isinstance(node, ReturnStmt):
+            if node.value:
+                bytes_used, objects_used = self._expr_storage(info, node.value, include_calls, visiting)
+                total_bytes = self._saturating_add(total_bytes, bytes_used)
+                total_objects = self._saturating_add(total_objects, objects_used)
+
+        return (total_bytes, total_objects)
+
+    def _expr_storage(
+        self,
+        info: FunctionInfo,
+        expr: Expression,
+        include_calls: bool,
+        visiting: Set[str],
+    ) -> Tuple[int, int]:
+        total_bytes = 0
+        total_objects = 0
+
+        if isinstance(expr, CallExpr):
+            callee = self._resolve_call_target(info.module_name, expr)
+            if callee:
+                if include_calls and callee not in visiting:
+                    bytes_used, objects_used = self._storage_for_function(callee, visiting)
+                else:
+                    bytes_used, objects_used = self._direct_storage_usage(callee)
+                total_bytes = self._saturating_add(total_bytes, bytes_used)
+                total_objects = self._saturating_add(total_objects, objects_used)
+
+            for argument in expr.arguments:
+                bytes_used, objects_used = self._expr_storage(info, argument, include_calls, visiting)
+                total_bytes = self._saturating_add(total_bytes, bytes_used)
+                total_objects = self._saturating_add(total_objects, objects_used)
+
+        elif isinstance(expr, BinaryExpr):
+            left_bytes, left_objects = self._expr_storage(info, expr.left, include_calls, visiting)
+            right_bytes, right_objects = self._expr_storage(info, expr.right, include_calls, visiting)
+            total_bytes = self._saturating_add(left_bytes, right_bytes)
+            total_objects = self._saturating_add(left_objects, right_objects)
+
+        elif isinstance(expr, UnaryExpr):
+            total_bytes, total_objects = self._expr_storage(info, expr.operand, include_calls, visiting)
+
+        elif isinstance(expr, AssignmentExpr):
+            left_bytes, left_objects = self._expr_storage(info, expr.target, include_calls, visiting)
+            right_bytes, right_objects = self._expr_storage(info, expr.value, include_calls, visiting)
+            total_bytes = self._saturating_add(left_bytes, right_bytes)
+            total_objects = self._saturating_add(left_objects, right_objects)
+
+        return (total_bytes, total_objects)
+
+    def _direct_storage_usage(self, qualified_name: str) -> Tuple[int, int]:
+        callee_info = self.functions.get(qualified_name)
+        if callee_info is None:
+            return (0, 0)
+        return self._storage_annotation_values(callee_info)
 
     def _calculate_heap_usage(
         self,
@@ -818,7 +1084,9 @@ class ProgramResourceAnalyzer:
             has_nondeterministic = self._has_annotation(info.decl.annotations, "nondeterministic")
             has_blocking = self._has_annotation(info.decl.annotations, "blocking")
             has_isr_safe = self._has_annotation(info.decl.annotations, "isr_safe")
+            has_reentrant = self._has_annotation(info.decl.annotations, "reentrant")
             allocates_annotation = self._find_annotation(info.decl.annotations, "allocates")
+            storage_annotation = self._find_annotation(info.decl.annotations, "storage")
 
             if has_deterministic and has_nondeterministic:
                 self._error(
@@ -852,6 +1120,24 @@ class ProgramResourceAnalyzer:
                     info.module_name,
                 )
 
+            if has_isr_safe and storage_annotation is not None:
+                self._error(
+                    "E_EFFECT_CONFLICT",
+                    f"function '{info.name}' cannot be both @isr_safe and @storage",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if storage_annotation is not None:
+                bytes_value, objects_value = self._storage_annotation_values(info)
+                if bytes_value <= 0 and objects_value <= 0:
+                    self._error(
+                        "E_STORAGE_CONTRACT_REQUIRED",
+                        f"function '{info.name}' uses @storage and must declare max_bytes and/or max_objects",
+                        storage_annotation.span,
+                        info.module_name,
+                    )
+
             if not info.is_extern:
                 continue
 
@@ -874,6 +1160,42 @@ class ProgramResourceAnalyzer:
                 else:
                     self._annotation_int_value(info, allocates_annotation, ("max", "bytes", "value"))
 
+            if has_isr_safe and not has_reentrant:
+                self._error(
+                    "E_EFFECT_CONFLICT",
+                    f"extern function '{info.name}' marked @isr_safe must also declare @reentrant",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+    def _validate_codegen_annotations(self):
+        for info in self.functions.values():
+            region_annotation = self._find_annotation(info.decl.annotations, "region")
+            if region_annotation is None:
+                continue
+
+            region_arg = None
+            if region_annotation.arguments:
+                region_arg = region_annotation.arguments.get("value")
+
+            if not isinstance(region_arg, (LiteralExpr, IdentifierExpr)):
+                self._error(
+                    "E_INVALID_REGION",
+                    f"function '{info.name}' uses @region and requires a string or identifier argument",
+                    region_annotation.span,
+                    info.module_name,
+                )
+                continue
+
+            if isinstance(region_arg, LiteralExpr):
+                if region_arg.kind != "string" or not region_arg.value:
+                    self._error(
+                        "E_INVALID_REGION",
+                        f"function '{info.name}' uses @region and requires a non-empty string",
+                        region_annotation.span,
+                        info.module_name,
+                    )
+
     def _compute_effects(self):
         for component_index in range(len(self.components)):
             summary = self._component_effects(component_index)
@@ -884,6 +1206,9 @@ class ProgramResourceAnalyzer:
                 info.isr_safe = summary.isr_safe
                 info.blocking = summary.blocking
                 info.allocates = summary.allocates
+                info.may_fail = summary.may_fail
+                info.uses_timer = summary.uses_timer
+                info.reentrant = summary.reentrant
 
     def _component_effects(self, component_index: int) -> EffectSummary:
         if component_index in self._component_effect_cache:
@@ -894,6 +1219,9 @@ class ProgramResourceAnalyzer:
         isr_safe = True
         blocking = False
         allocates = False
+        may_fail = False
+        uses_timer = False
+        reentrant = True
 
         for member in component.members:
             info = self.functions[member]
@@ -902,6 +1230,9 @@ class ProgramResourceAnalyzer:
             isr_safe = isr_safe and base_effects.isr_safe
             blocking = blocking or base_effects.blocking
             allocates = allocates or base_effects.allocates
+            may_fail = may_fail or base_effects.may_fail
+            uses_timer = uses_timer or base_effects.uses_timer
+            reentrant = reentrant and base_effects.reentrant
 
         for target in component.outgoing_components:
             target_effects = self._component_effects(target)
@@ -909,14 +1240,24 @@ class ProgramResourceAnalyzer:
             isr_safe = isr_safe and target_effects.isr_safe
             blocking = blocking or target_effects.blocking
             allocates = allocates or target_effects.allocates
+            may_fail = may_fail or target_effects.may_fail
+            uses_timer = uses_timer or target_effects.uses_timer
+            reentrant = reentrant and target_effects.reentrant
 
-        isr_safe = isr_safe and deterministic and not blocking and not allocates
+        storage_used = any(
+            self.functions[member].total_storage_bytes > 0 or self.functions[member].total_storage_objects > 0
+            for member in component.members
+        )
+        isr_safe = isr_safe and deterministic and not blocking and not allocates and not storage_used and reentrant
 
         summary = EffectSummary(
             deterministic=deterministic,
             isr_safe=isr_safe,
             blocking=blocking,
             allocates=allocates,
+            may_fail=may_fail,
+            uses_timer=uses_timer,
+            reentrant=reentrant,
         )
         self._component_effect_cache[component_index] = summary
         return summary
@@ -926,25 +1267,37 @@ class ProgramResourceAnalyzer:
         has_nondeterministic = self._has_annotation(info.decl.annotations, "nondeterministic")
         has_blocking = self._has_annotation(info.decl.annotations, "blocking")
         has_isr_safe = self._has_annotation(info.decl.annotations, "isr_safe")
+        has_reentrant = self._has_annotation(info.decl.annotations, "reentrant")
         has_allocates = self._find_annotation(info.decl.annotations, "allocates") is not None
+        has_may_fail = self._has_annotation(info.decl.annotations, "may_fail")
+        has_uses_timer = self._has_annotation(info.decl.annotations, "uses_timer")
+        storage_bytes = info.local_storage_bytes
+        storage_objects = info.local_storage_objects
 
         if info.is_extern:
             deterministic = has_deterministic and not has_nondeterministic
             return EffectSummary(
                 deterministic=deterministic,
-                isr_safe=has_isr_safe,
+                isr_safe=has_isr_safe and has_reentrant and deterministic and not has_blocking and not has_allocates and storage_bytes == 0 and storage_objects == 0,
                 blocking=has_blocking,
                 allocates=has_allocates,
+                may_fail=has_may_fail,
+                uses_timer=has_uses_timer,
+                reentrant=has_reentrant,
             )
 
         deterministic = not has_nondeterministic
         allocates = has_allocates or info.local_heap_bytes > 0
-        isr_safe = deterministic and not has_blocking and not allocates
+        reentrant = storage_bytes == 0 and storage_objects == 0
+        isr_safe = deterministic and not has_blocking and not allocates and storage_bytes == 0 and storage_objects == 0 and reentrant
         return EffectSummary(
             deterministic=deterministic,
             isr_safe=isr_safe,
             blocking=has_blocking,
             allocates=allocates,
+            may_fail=has_may_fail,
+            uses_timer=has_uses_timer,
+            reentrant=reentrant,
         )
 
     def _validate_effect_assertions(self):
@@ -964,6 +1317,14 @@ class ProgramResourceAnalyzer:
                 self._error(
                     "E_ISR_SAFETY_CONTRACT",
                     f"function '{info.name}' is annotated @isr_safe but is not ISR-safe",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if self._has_annotation(info.decl.annotations, "reentrant") and not info.reentrant:
+                self._error(
+                    "E_REENTRANT_CONTRACT",
+                    f"function '{info.name}' is annotated @reentrant but is not reentrant",
                     info.decl.span,
                     info.module_name,
                 )
@@ -1022,6 +1383,14 @@ class ProgramResourceAnalyzer:
                     info.module_name,
                 )
 
+            if info.total_storage_bytes > 0 or info.total_storage_objects > 0:
+                self._error(
+                    "E_INTERRUPT_STORAGE",
+                    "@interrupt functions cannot use persistent storage",
+                    info.decl.span,
+                    info.module_name,
+                )
+
             if info.blocking:
                 self._error(
                     "E_INTERRUPT_BLOCKING",
@@ -1046,6 +1415,122 @@ class ProgramResourceAnalyzer:
                     info.module_name,
                 )
 
+            if not info.reentrant:
+                self._error(
+                    "E_INTERRUPT_REENTRANCY",
+                    "@interrupt functions can only call reentrant code",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+    def _validate_tasks(self):
+        for info in self.functions.values():
+            if not info.is_task:
+                continue
+
+            task_annotation = self._find_annotation(info.decl.annotations, "task")
+            if task_annotation is not None:
+                info.task_stack_bytes = self._annotation_int_value(info, task_annotation, ("stack", "value")) or 0
+                info.task_priority = self._annotation_optional_int_value(info, task_annotation, ("priority",))
+
+            if info.is_extern:
+                self._error(
+                    "E_TASK_EXTERN",
+                    "@task functions cannot be extern",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if info.decl.visibility != "public":
+                self._error(
+                    "E_TASK_VISIBILITY",
+                    "@task functions must be public so the target runtime can bind them",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if info.decl.params:
+                self._error(
+                    "E_TASK_SIGNATURE",
+                    "@task functions must not take parameters",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            return_type = info.type_checker._resolve_type(info.decl.return_type)
+            if return_type and not isinstance(return_type, VoidType):
+                self._error(
+                    "E_TASK_SIGNATURE",
+                    "@task functions must return void",
+                    info.decl.return_type.span,
+                    info.module_name,
+                )
+
+            if info.recursion_depth is not None:
+                self._error(
+                    "E_TASK_RECURSION",
+                    "@task functions cannot be recursive",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if info.is_interrupt:
+                self._error(
+                    "E_TASK_INTERRUPT_CONFLICT",
+                    "functions cannot be both @task and @interrupt",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if info.task_stack_bytes <= 0:
+                self._error(
+                    "E_TASK_STACK_REQUIRED",
+                    "@task functions require @task(stack=N)",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+    def _validate_module_profiles(self):
+        for module_name, module in self.modules.items():
+            if not module.directives.get("strict"):
+                continue
+
+            for qualified_name, info in self.functions.items():
+                if info.module_name != module_name:
+                    continue
+
+                if not info.deterministic:
+                    self._error(
+                        "E_STRICT_NONDETERMINISTIC",
+                        f"strict module '{module_name}' cannot call non-deterministic code",
+                        info.decl.span,
+                        info.module_name,
+                    )
+
+                if info.blocking:
+                    self._error(
+                        "E_STRICT_BLOCKING",
+                        f"strict module '{module_name}' cannot call blocking code",
+                        info.decl.span,
+                        info.module_name,
+                    )
+
+                if info.total_heap_bytes > 0:
+                    self._error(
+                        "E_STRICT_HEAP",
+                        f"strict module '{module_name}' cannot allocate heap memory",
+                        info.decl.span,
+                        info.module_name,
+                    )
+
+                if info.total_storage_bytes > 0 or info.total_storage_objects > 0:
+                    self._error(
+                        "E_STRICT_STORAGE",
+                        f"strict module '{module_name}' cannot use persistent storage",
+                        info.decl.span,
+                        info.module_name,
+                    )
+
     def _apply_stack_budgets(self):
         for info in self.functions.values():
             stack_budget = self._optional_stack_annotation(info)
@@ -1061,6 +1546,9 @@ class ProgramResourceAnalyzer:
         self.resources.clear()
         self.total_stack_bytes = 0
         self.total_heap_bytes = 0
+        self.total_storage_bytes = 0
+        self.total_storage_objects = 0
+        self.total_task_stack_bytes = 0
         self.deepest_stack_path = []
 
         for qualified_name, info in self.functions.items():
@@ -1069,18 +1557,28 @@ class ProgramResourceAnalyzer:
                 frame_stack_bytes=info.frame_stack_bytes,
                 stack_bytes=info.stack_bytes,
                 heap_bytes=info.total_heap_bytes,
+                storage_bytes=info.total_storage_bytes,
+                storage_objects=info.total_storage_objects,
                 recursion_depth=info.recursion_depth,
                 deterministic=info.deterministic,
                 isr_safe=info.isr_safe,
                 blocking=info.blocking,
                 allocates=info.allocates,
+                may_fail=info.may_fail,
+                uses_timer=info.uses_timer,
+                reentrant=info.reentrant,
                 is_interrupt=info.is_interrupt,
+                is_task=info.is_task,
+                task_stack_bytes=info.task_stack_bytes,
                 call_path=call_path,
             )
             self.resources[qualified_name] = resource
 
             self.total_stack_bytes = max(self.total_stack_bytes, resource.stack_bytes)
             self.total_heap_bytes += resource.heap_bytes
+            self.total_storage_bytes += resource.storage_bytes
+            self.total_storage_objects += resource.storage_objects
+            self.total_task_stack_bytes += resource.task_stack_bytes
             if resource.stack_bytes == self.total_stack_bytes:
                 self.deepest_stack_path = list(call_path)
 
@@ -1216,6 +1714,23 @@ class ProgramResourceAnalyzer:
             return None
 
         return value.value
+
+    def _annotation_optional_int_value(
+        self,
+        info: FunctionInfo,
+        annotation: Annotation,
+        keys: Tuple[str, ...],
+    ) -> Optional[int]:
+        for key in keys:
+            if annotation.arguments and key in annotation.arguments:
+                return self._annotation_int_value(info, annotation, (key,))
+        return None
+
+    def _saturating_add(self, left: int, right: int) -> int:
+        value = left + right
+        if value < 0:
+            return 0
+        return value
 
     def _find_annotation(self, annotations: List[Annotation], name: str) -> Optional[Annotation]:
         for annotation in annotations:

@@ -1,0 +1,23 @@
+#[max_memory(8kb)]
+
+import io::*;
+import time::*;
+
+public fn main() -> i32 {
+    let start: u32 = 0xFFFF_FFF0 as u32;
+    let deadline: u32 = deadline_from_u32(start, 32 as u32);
+    let now: u32 = 0x0000_0008 as u32;
+
+    print("elapsed=");
+    out_u32(elapsed_u32(start, now));
+    newline();
+
+    print("deadline_reached=");
+    out_bool(deadline_reached_u32(now, deadline));
+    newline();
+
+    print("before=");
+    out_bool(before_u32(start, now));
+    newline();
+    return 0;
+}

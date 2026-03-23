@@ -1,0 +1,7 @@
+#[max_memory(4kb)]
+
+@deterministic @storage @stack(32) extern fn append_log() -> void;
+
+public fn main() -> void {
+    append_log();
+}

@@ -1,0 +1,10 @@
+#[max_memory(4kb)]
+
+import mmio::*;
+
+public fn main() -> void {
+    let gpio_out: volatile *u32 = 0x3FF44004 as volatile *u32;
+    write32(gpio_out, 1 as u32);
+    set_bits32(gpio_out, 2 as u32);
+    clear_bits32(gpio_out, 1 as u32);
+}

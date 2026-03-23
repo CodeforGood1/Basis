@@ -1,0 +1,17 @@
+#[max_memory(4kb)]
+#[strict]
+
+import time::*;
+
+public fn compute_timeout(now: u32, delay: u32) -> bool {
+    let deadline: u32 = deadline_from_u32(now, delay);
+    return deadline_reached_u32(now + delay, deadline);
+}
+
+public fn main() -> i32 {
+    let ok: bool = compute_timeout(100 as u32, 25 as u32);
+    if ok {
+        return 0;
+    }
+    return 0;
+}

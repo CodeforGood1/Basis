@@ -1,0 +1,8 @@
+#[max_memory(4kb)]
+#[strict]
+
+import io::*;
+
+public fn main() -> void {
+    print("not allowed");
+}

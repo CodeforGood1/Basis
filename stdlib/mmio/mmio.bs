@@ -1,0 +1,36 @@
+// BASIS Standard Library - MMIO helpers
+// Thin volatile register access wrappers for memory-mapped devices.
+
+public fn read8(addr: volatile *u8) -> u8 {
+    return *addr;
+}
+
+public fn write8(addr: volatile *u8, value: u8) -> void {
+    *addr = value;
+}
+
+public fn read16(addr: volatile *u16) -> u16 {
+    return *addr;
+}
+
+public fn write16(addr: volatile *u16, value: u16) -> void {
+    *addr = value;
+}
+
+public fn read32(addr: volatile *u32) -> u32 {
+    return *addr;
+}
+
+public fn write32(addr: volatile *u32, value: u32) -> void {
+    *addr = value;
+}
+
+public fn set_bits32(addr: volatile *u32, mask: u32) -> void {
+    let current: u32 = *addr;
+    *addr = current | mask;
+}
+
+public fn clear_bits32(addr: volatile *u32, mask: u32) -> void {
+    let current: u32 = *addr;
+    *addr = current & ~mask;
+}

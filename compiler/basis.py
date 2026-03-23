@@ -410,6 +410,9 @@ def compile_basis(input_files: List[str],
 
     total_stack = 0
     total_heap = 0
+    total_storage_bytes = 0
+    total_storage_objects = 0
+    total_task_stack = 0
     deepest_path = []
     all_resources = program_resources.get_all_resources()
     for qualified_name in entry_function_names:
@@ -420,6 +423,9 @@ def compile_basis(input_files: List[str],
             total_stack = resource.stack_bytes
             deepest_path = list(resource.call_path)
         total_heap += resource.heap_bytes
+        total_storage_bytes += resource.storage_bytes
+        total_storage_objects += resource.storage_objects
+    total_task_stack = sum(resource.task_stack_bytes for resource in all_resources.values())
     
     # Estimate code size (rough estimate: 100 bytes per function)
     total_functions = sum(
@@ -427,7 +433,7 @@ def compile_basis(input_files: List[str],
         for m in modules.values()
     )
     estimated_code_size = total_functions * 100
-    total_program_size = total_stack + total_heap + estimated_code_size
+    total_program_size = total_stack + total_heap + total_task_stack + estimated_code_size
     
     print("\n" + "="*70)
     print("RESOURCE ANALYSIS")
@@ -449,14 +455,20 @@ def compile_basis(input_files: List[str],
                 print(f"    Frame:     {resource.frame_stack_bytes:6d} bytes")
                 print(f"    Stack:     {resource.stack_bytes:6d} bytes")
                 print(f"    Heap:      {resource.heap_bytes:6d} bytes")
+                print(f"    Storage:   {resource.storage_bytes:6d} bytes / {resource.storage_objects:3d} objects")
                 if resource.recursion_depth is not None:
                     print(f"    Recursion: depth {resource.recursion_depth}")
                 print(f"    Deterministic: {'yes' if resource.deterministic else 'no'}")
                 print(f"    ISR-safe:      {'yes' if resource.isr_safe else 'no'}")
                 print(f"    Blocking:      {'yes' if resource.blocking else 'no'}")
                 print(f"    Allocates:     {'yes' if resource.allocates else 'no'}")
+                print(f"    Reentrant:     {'yes' if resource.reentrant else 'no'}")
+                print(f"    May fail:      {'yes' if resource.may_fail else 'no'}")
+                print(f"    Uses timer:    {'yes' if resource.uses_timer else 'no'}")
                 if resource.is_interrupt:
                     print(f"    Interrupt:     yes")
+                if resource.is_task:
+                    print(f"    Task:          yes ({resource.task_stack_bytes}B stack)")
                 if resource.call_path:
                     print(f"    Deepest path:  {' -> '.join(resource.call_path)}")
     
@@ -464,6 +476,8 @@ def compile_basis(input_files: List[str],
     print(f"\nProgram Size Summary:")
     print(f"  Stack (max):   {total_stack:8d} bytes")
     print(f"  Heap (total):  {total_heap:8d} bytes")
+    print(f"  Task stack:    {total_task_stack:8d} bytes")
+    print(f"  Storage use:   {total_storage_bytes:8d} bytes / {total_storage_objects} objects")
     print(f"  Code (~):      {estimated_code_size:8d} bytes")
     print(f"  -------------------------------")
     print(f"  TOTAL:         {total_program_size:8d} bytes ({total_program_size / 1024:.2f} KB)")
@@ -542,6 +556,45 @@ def compile_basis(input_files: List[str],
         print(f"\nMemory Budget: {total_program_size}/{max_memory_declared} bytes ({used_percent:.1f}% used)")
         print(f"Remaining:     {remaining} bytes ({remaining / 1024:.2f} KB)")
         print("[OK] Program fits within declared memory budget\n")
+
+    max_storage_declared = sum(
+        module.directives.get("max_storage", 0)
+        for name, module in modules.items()
+        if name not in stdlib_modules
+    )
+    if max_storage_declared:
+        if total_storage_bytes > max_storage_declared:
+            print("error: program exceeds declared persistent storage budget", file=sys.stderr)
+            print(f"  Declared max_storage: {max_storage_declared} bytes", file=sys.stderr)
+            print(f"  Actual storage use:   {total_storage_bytes} bytes", file=sys.stderr)
+            return 1
+        print(f"Storage Budget: {total_storage_bytes}/{max_storage_declared} bytes")
+
+    max_storage_objects_declared = sum(
+        module.directives.get("max_storage_objects", 0)
+        for name, module in modules.items()
+        if name not in stdlib_modules
+    )
+    if max_storage_objects_declared:
+        if total_storage_objects > max_storage_objects_declared:
+            print("error: program exceeds declared persistent object budget", file=sys.stderr)
+            print(f"  Declared max_storage_objects: {max_storage_objects_declared}", file=sys.stderr)
+            print(f"  Actual storage objects:       {total_storage_objects}", file=sys.stderr)
+            return 1
+        print(f"Storage Objects: {total_storage_objects}/{max_storage_objects_declared}")
+
+    max_task_stack_declared = sum(
+        module.directives.get("max_task_stack", 0)
+        for name, module in modules.items()
+        if name not in stdlib_modules
+    )
+    if max_task_stack_declared:
+        if total_task_stack > max_task_stack_declared:
+            print("error: program exceeds declared task stack budget", file=sys.stderr)
+            print(f"  Declared max_task_stack: {max_task_stack_declared} bytes", file=sys.stderr)
+            print(f"  Actual task stack use:  {total_task_stack} bytes", file=sys.stderr)
+            return 1
+        print(f"Task Stack Budget: {total_task_stack}/{max_task_stack_declared} bytes")
     
     # ========================================================================
     # Resource Validation Against Target Limits (optional --target flag)
