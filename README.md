@@ -1,6 +1,6 @@
 # BASIS v1.0 — Compiler Documentation
 
-> **BASIS**: A pure, deterministic, resource-safe systems language for embedded development.
+> **BASIS**: A deterministic and resource safe systems language for embedded development.
 
 ## Documentation Index
 
