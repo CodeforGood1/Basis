@@ -47,45 +47,40 @@ fn main() -> i32 {
 - explicit foreign-function effect contracts
 - C code generation for host and embedded integration
 
-## Current State
+## Implemented Capabilities
 
-BASIS already has:
-- its own lexer, parser, semantic analysis, and type checker
-- compile-time resource analysis
-- no `while` loops; only bounded `for` loops remain
-- bounded recursion through `@recursion(max=N)`
+BASIS currently provides the following language and compiler capabilities:
+
+- a complete front end with lexing, parsing, semantic analysis, type checking, constant evaluation, and C code generation
+- deterministic control flow rules with `while` removed, bounded `for` loops, and bounded recursion through `@recursion(max=N)`
+- explicit per-module memory budgets through `#[max_memory(...)]`
+- whole-program resource analysis covering stack, heap, task stack, persistent storage, estimated code size, and deepest call path
+- strict deterministic profiles through `#[strict]`
 - interrupt handlers through `@interrupt`
 - task entry points through `@task(stack=N, priority=N)`
-- strict modules through `#[strict]`
-- persistent-storage budgets through `#[max_storage(...)]`, `#[max_storage_objects(...)]`, and `@storage(...)`
-- time helpers in `stdlib/time`
-- MMIO helpers in `stdlib/mmio`
-- bit and register helpers in `stdlib/bits`
-- fixed-size CRC helpers in `stdlib/crc`
-- fixed-size byte queues in `stdlib/ring`
-- explicit foreign-call contracts such as `@deterministic`, `@blocking`, `@allocates`, `@storage`, `@reentrant`, `@uses_timer`, `@may_fail`, and `@isr_safe`
-- a C backend and local examples/tests
-
-BASIS is an embedded systems language under active development, with a working compiler, static analysis pipeline, and growing support for deterministic and resource-aware firmware use cases.
-
-## What The Latest Pass Added
-
-The most recent compiler pass expanded BASIS beyond basic determinism and call graph analysis into a broader embedded systems model:
-
-- `#[strict]` modules for tighter deterministic subsets
-- `@task(stack=N)` task entry points with explicit task stack budgeting
 - persistent storage budgeting through `#[max_storage(...)]`, `#[max_storage_objects(...)]`, and `@storage(...)`
-- richer foreign effect tracking including `@reentrant`, `@uses_timer`, and `@may_fail`
-- interrupt validation extended to reject persistent storage and non reentrant call paths
-- `stdlib/time` for rollover-aware time helpers
-- `stdlib/mmio` for MMIO-style volatile register access
-- `stdlib/bits` for register masks, packed fields, and alignment helpers
-- `stdlib/crc` for bounded packet integrity helpers
-- `stdlib/ring` for deterministic fixed-size byte queues
-- stronger diagnostics and negative tests for invalid task, storage, strict, ISR, and MMIO usage
-- a learn-the-language guide and versioned release packaging path
+- foreign-function contracts through annotations such as `@deterministic`, `@nondeterministic`, `@blocking`, `@allocates`, `@storage`, `@reentrant`, `@uses_timer`, `@may_fail`, and `@isr_safe`
+- rollover-safe time helpers in `stdlib/time`
+- volatile MMIO helpers in `stdlib/mmio`
+- register, checksum, and fixed queue helpers in `stdlib/bits`, `stdlib/crc`, and `stdlib/ring`
+- local examples, negative tests, and a release packaging flow for Windows
 
-These changes make BASIS more applicable to long running embedded systems, RTOS style task based applications, and low level firmware that needs explicit resource and boundary contracts.
+BASIS is an embedded systems language under active development, with a working compiler, a static analysis pipeline, a growing standard library, and verified source and packaged workflows.
+
+## Standard Library
+
+The current standard library is intentionally small and targeted at deterministic embedded work:
+
+- `core` for basic numeric helpers, boolean helpers, assertions, and swaps
+- `io` for printing and basic host-side input
+- `mem` for explicit heap and memory operations
+- `math` for integer math and scaling helpers
+- `string` for C-style string functions
+- `time` for rollover-safe tick and deadline logic
+- `mmio` for volatile register access
+- `bits` for masks, packed fields, and alignment
+- `crc` for fixed-size checksum and CRC helpers
+- `ring` for fixed-size byte queues
 
 ## Getting Started
 
@@ -325,12 +320,21 @@ compiler/
 
 stdlib/
 ├── core/core.bs
-├── mem/mem.bs
 ├── io/io.bs
-└── math/math.bs
+├── mem/mem.bs
+├── math/math.bs
+├── string/string.bs
+├── time/time.bs
+├── mmio/mmio.bs
+├── bits/bits.bs
+├── crc/crc.bs
+└── ring/ring.bs
 
 examples/
 ├── hello.bs
+├── bits_demo.bs
+├── crc_demo.bs
+├── ring_demo.bs
 └── test_io.bs
 ```
 
