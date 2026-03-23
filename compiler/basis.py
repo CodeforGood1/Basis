@@ -24,6 +24,23 @@ from ast_defs import Module, FunctionDecl, ImportDecl
 from target_config import TargetConfig, PREDEFINED_TARGETS
 
 
+def to_native_tool_path(pathlike) -> str:
+    r"""
+    Normalize paths passed to external Windows tools.
+
+    Python can surface extended-length paths such as ``\\?\D:\...`` on Windows.
+    Some toolchains (including common MinGW gcc builds) do not accept that form,
+    so strip the prefix before invoking external processes.
+    """
+    path = os.path.normpath(os.fspath(pathlike))
+    if os.name == "nt":
+        if path.startswith("\\\\?\\UNC\\"):
+            return "\\" + path[7:]
+        if path.startswith("\\\\?\\"):
+            return path[4:]
+    return path
+
+
 def validate_main_function(modules: Dict[str, Module], is_library_build: bool = False) -> Optional[str]:
     """
     Validate main() function requirements.
@@ -544,7 +561,7 @@ def compile_basis(input_files: List[str],
         diag.print_all()
         return 1
     
-    print(f"Generated C code in {output_path}")
+    print(f"Generated C code in {to_native_tool_path(output_path)}")
     
     # Stop here if --emit-c
     if emit_c_only:
@@ -568,8 +585,8 @@ def compile_basis(input_files: List[str],
     binary_path = output_path / binary_name
     
     # Build gcc command
-    gcc_cmd = ["gcc", "-std=c99", "-o", str(binary_path)]
-    gcc_cmd.extend(str(f) for f in c_files)
+    gcc_cmd = ["gcc", "-std=c99", "-o", to_native_tool_path(binary_path)]
+    gcc_cmd.extend(to_native_tool_path(f) for f in c_files)
     
     print(f"Compiling with gcc...")
     
@@ -590,17 +607,17 @@ def compile_basis(input_files: List[str],
         print(f"error: failed to invoke gcc: {e}", file=sys.stderr)
         return 1
     
-    print(f"Built executable: {binary_path}")
+    print(f"Built executable: {to_native_tool_path(binary_path)}")
     
     # ========================================================================
     # Run executable if --run
     # ========================================================================
     
     if run_after:
-        print(f"\nRunning {binary_path}...")
+        print(f"\nRunning {to_native_tool_path(binary_path)}...")
         print("=" * 70)
         try:
-            result = subprocess.run([str(binary_path)])
+            result = subprocess.run([to_native_tool_path(binary_path)])
             return result.returncode
         except Exception as e:
             print(f"error: failed to run executable: {e}", file=sys.stderr)
