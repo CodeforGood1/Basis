@@ -1,0 +1,38 @@
+#[max_memory(8kb)]
+
+import io::*;
+import ring::*;
+
+fn main() -> i32 {
+    let queue: RingU8x64 = ring_u8x64_init();
+    let front: u8 = 0 as u8;
+    let value: u8 = 0 as u8;
+
+    print("push1=");
+    out_bool(ring_u8x64_push(&queue, 10 as u8));
+    newline();
+
+    print("push2=");
+    out_bool(ring_u8x64_push(&queue, 20 as u8));
+    newline();
+
+    ring_u8x64_peek(&queue, &front);
+    print("peek=");
+    out_u32(front as u32);
+    newline();
+
+    print("count=");
+    out_u32(ring_u8x64_count(&queue));
+    newline();
+
+    ring_u8x64_pop(&queue, &value);
+    print("pop=");
+    out_u32(value as u32);
+    newline();
+
+    print("count_after=");
+    out_u32(ring_u8x64_count(&queue));
+    newline();
+
+    return 0;
+}

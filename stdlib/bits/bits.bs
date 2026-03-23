@@ -1,0 +1,68 @@
+// BASIS Standard Library - Bit and register helpers
+// Useful for flags, register fields, and packed headers.
+
+public fn bit_mask_u32(bit: u32) -> u32 {
+    return (1 as u32) << bit;
+}
+
+public fn set_bit_u32(value: u32, bit: u32) -> u32 {
+    return value | bit_mask_u32(bit);
+}
+
+public fn clear_bit_u32(value: u32, bit: u32) -> u32 {
+    return value & ~bit_mask_u32(bit);
+}
+
+public fn toggle_bit_u32(value: u32, bit: u32) -> u32 {
+    return value ^ bit_mask_u32(bit);
+}
+
+public fn test_bit_u32(value: u32, bit: u32) -> bool {
+    return (value & bit_mask_u32(bit)) != (0 as u32);
+}
+
+public fn update_bit_u32(value: u32, bit: u32, enabled: bool) -> u32 {
+    if enabled {
+        return set_bit_u32(value, bit);
+    } else {
+        return clear_bit_u32(value, bit);
+    }
+}
+
+public fn field_get_u32(value: u32, mask: u32, shift: u32) -> u32 {
+    return (value & mask) >> shift;
+}
+
+public fn field_set_u32(value: u32, mask: u32, shift: u32, field_value: u32) -> u32 {
+    let cleared: u32 = value & ~mask;
+    let shifted: u32 = (field_value << shift) & mask;
+    return cleared | shifted;
+}
+
+// Alignment helpers assume power-of-two alignment values.
+public fn align_up_u32(value: u32, alignment: u32) -> u32 {
+    if alignment == (0 as u32) {
+        return value;
+    }
+
+    let mask: u32 = alignment - (1 as u32);
+    return (value + mask) & ~mask;
+}
+
+public fn align_down_u32(value: u32, alignment: u32) -> u32 {
+    if alignment == (0 as u32) {
+        return value;
+    }
+
+    let mask: u32 = alignment - (1 as u32);
+    return value & ~mask;
+}
+
+public fn is_aligned_u32(value: u32, alignment: u32) -> bool {
+    if alignment == (0 as u32) {
+        return true;
+    }
+
+    let mask: u32 = alignment - (1 as u32);
+    return (value & mask) == (0 as u32);
+}

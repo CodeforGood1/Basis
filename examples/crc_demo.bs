@@ -1,0 +1,28 @@
+#[max_memory(8kb)]
+
+import io::*;
+import crc::*;
+
+fn main() -> i32 {
+    let packet8: [u8; 8] = [
+        1 as u8, 2 as u8, 3 as u8, 4 as u8,
+        5 as u8, 6 as u8, 7 as u8, 8 as u8
+    ];
+
+    let packet16: [u8; 16] = [
+        1 as u8, 2 as u8, 3 as u8, 4 as u8,
+        5 as u8, 6 as u8, 7 as u8, 8 as u8,
+        9 as u8, 10 as u8, 11 as u8, 12 as u8,
+        13 as u8, 14 as u8, 15 as u8, 16 as u8
+    ];
+
+    print("crc8=");
+    out_u32(crc8_u8x8(packet8) as u32);
+    newline();
+
+    print("crc16=");
+    out_u32(crc16_modbus_u8x16(packet16) as u32);
+    newline();
+
+    return 0;
+}

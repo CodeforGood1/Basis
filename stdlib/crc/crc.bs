@@ -1,0 +1,70 @@
+// BASIS Standard Library - Fixed-size checksum and CRC helpers
+// Designed for common bounded packet sizes in embedded protocols.
+
+public fn crc8_update(crc: u8, byte: u8) -> u8 {
+    let value: u8 = crc ^ byte;
+
+    for bit in 0..8 {
+        if (value & (0x80 as u8)) != (0 as u8) {
+            value = ((value << (1 as u8)) ^ (0x07 as u8)) as u8;
+        } else {
+            value = (value << (1 as u8)) as u8;
+        }
+    }
+
+    return value;
+}
+
+public fn crc8_u8x8(data: [u8; 8]) -> u8 {
+    let crc: u8 = 0 as u8;
+
+    for i in 0..8 {
+        crc = crc8_update(crc, data[i]);
+    }
+
+    return crc;
+}
+
+public fn crc8_u8x16(data: [u8; 16]) -> u8 {
+    let crc: u8 = 0 as u8;
+
+    for i in 0..16 {
+        crc = crc8_update(crc, data[i]);
+    }
+
+    return crc;
+}
+
+public fn crc16_modbus_update(crc: u16, byte: u8) -> u16 {
+    let value: u16 = crc ^ (byte as u16);
+
+    for bit in 0..8 {
+        if (value & (1 as u16)) != (0 as u16) {
+            value = (value >> (1 as u16)) ^ (0xA001 as u16);
+        } else {
+            value = value >> (1 as u16);
+        }
+    }
+
+    return value;
+}
+
+public fn crc16_modbus_u8x8(data: [u8; 8]) -> u16 {
+    let crc: u16 = 0xFFFF as u16;
+
+    for i in 0..8 {
+        crc = crc16_modbus_update(crc, data[i]);
+    }
+
+    return crc;
+}
+
+public fn crc16_modbus_u8x16(data: [u8; 16]) -> u16 {
+    let crc: u16 = 0xFFFF as u16;
+
+    for i in 0..16 {
+        crc = crc16_modbus_update(crc, data[i]);
+    }
+
+    return crc;
+}

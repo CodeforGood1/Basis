@@ -75,6 +75,9 @@ import math::{abs_i32, max_i32};  // Import specific symbols
 - `math` - Advanced math (square, cube, power, is_even, sign)
 - `time` - Rollover-safe tick/deadline helpers
 - `mmio` - Volatile register access helpers
+- `bits` - Register masks, packed fields, and alignment helpers
+- `crc` - Fixed-size checksum helpers for bounded packets
+- `ring` - Fixed-size byte ring buffers
 
 ---
 

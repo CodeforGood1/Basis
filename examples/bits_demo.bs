@@ -1,0 +1,26 @@
+#[max_memory(8kb)]
+
+import io::*;
+import bits::*;
+
+fn main() -> i32 {
+    let reg: u32 = 0 as u32;
+
+    reg = set_bit_u32(reg, 1 as u32);
+    reg = set_bit_u32(reg, 5 as u32);
+    reg = field_set_u32(reg, 0x0000FF00 as u32, 8 as u32, 0x5A as u32);
+
+    print("reg=");
+    out_u32(reg);
+    newline();
+
+    print("bit5=");
+    out_bool(test_bit_u32(reg, 5 as u32));
+    newline();
+
+    print("aligned=");
+    out_u32(align_up_u32(70 as u32, 16 as u32));
+    newline();
+
+    return 0;
+}

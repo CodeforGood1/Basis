@@ -1,3 +1,7 @@
+param(
+    [switch]$VerifyPackage
+)
+
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
@@ -54,7 +58,10 @@ $hostExamples = @(
     "examples\recursion_demo.bs",
     "examples\time_demo.bs",
     "examples\task_demo.bs",
-    "examples\strict_demo.bs"
+    "examples\strict_demo.bs",
+    "examples\bits_demo.bs",
+    "examples\crc_demo.bs",
+    "examples\ring_demo.bs"
 )
 
 foreach ($example in $hostExamples) {
@@ -86,6 +93,18 @@ if (-not $taskSource.Contains('BASIS_REGION("iram") BASIS_TASK void telemetry_ta
 Invoke-BasisCheck `
     -CommandArgs @("build", "examples\storage_demo.bs", "--show-resources", "--emit-c") `
     -RequiredText @("Storage Budget: 512/1024 bytes", "Storage Objects: 4/8")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "examples\bits_demo.bs", "--run") `
+    -RequiredText @("reg=23074", "bit5=true", "aligned=80")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "examples\crc_demo.bs", "--run") `
+    -RequiredText @("crc8=", "crc16=")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "examples\ring_demo.bs", "--run") `
+    -RequiredText @("push1=true", "peek=10", "count_after=1")
 
 Invoke-BasisCheck -CommandArgs @("build", "examples\mmio_demo.bs", "--emit-c", "--target", "esp32")
 Invoke-BasisCheck -CommandArgs @("build", "examples\isr_demo.bs", "--lib", "--emit-c", "--target", "esp32")
@@ -179,5 +198,46 @@ Invoke-BasisCheck `
     -CommandArgs @("build", "tests\cases\invalid_region_expr.bs") `
     -ExpectSuccess $false `
     -RequiredText @("E_INVALID_REGION")
+
+if ($VerifyPackage) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Clean -Package
+    if ($LASTEXITCODE -ne 0) {
+        throw "Release package build failed."
+    }
+
+    $version = (Get-Content .\VERSION.txt -Raw).Trim()
+    $zipPath = ".\BASIS-v$version-win64.zip"
+
+    foreach ($path in @(
+        ".\dist\bin\basis.exe",
+        ".\dist\basis.bat",
+        ".\dist\README.md",
+        ".\dist\docs\LEARN.md",
+        ".\dist\stdlib\bits\bits.bs",
+        ".\dist\stdlib\crc\crc.bs",
+        ".\dist\stdlib\ring\ring.bs",
+        $zipPath
+    )) {
+        if (-not (Test-Path $path)) {
+            throw "Expected package artifact missing: $path"
+        }
+    }
+
+    Push-Location .\dist
+    try {
+        $packageOutput = (& .\basis.bat build examples\bits_demo.bs --emit-c 2>&1 | Out-String)
+        $packageExit = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+
+    if ($packageExit -ne 0) {
+        throw "Packaged compiler failed to build examples\bits_demo.bs`n$packageOutput"
+    }
+
+    if (-not (Test-Path .\dist\build\bits_demo.c)) {
+        throw "Packaged compiler did not emit dist\build\bits_demo.c"
+    }
+}
 
 Write-Host "All BASIS local checks passed."

@@ -1,5 +1,5 @@
-# BASIS v1.0 Build Script
-# Creates a distributable package with the compiler executable
+# BASIS build script
+# Creates a versioned distributable package with the compiler executable
 
 param(
     [switch]$Clean,
@@ -11,6 +11,7 @@ $ErrorActionPreference = "Stop"
 $ROOT = $PSScriptRoot
 $DIST = "$ROOT\dist"
 $BUILDDIR = "$ROOT\build_temp"
+$VERSION = (Get-Content "$ROOT\VERSION.txt" -Raw).Trim()
 
 function Clean-Build {
     Write-Host "Cleaning build artifacts..." -ForegroundColor Yellow
@@ -23,7 +24,7 @@ function Clean-Build {
 }
 
 function Build-Executable {
-    Write-Host "Building BASIS compiler executable..." -ForegroundColor Yellow
+    Write-Host "Building BASIS compiler executable v$VERSION..." -ForegroundColor Yellow
     
     Push-Location "$ROOT\compiler"
     
@@ -46,7 +47,7 @@ function Build-Executable {
 }
 
 function Create-Package {
-    Write-Host "Creating distribution package..." -ForegroundColor Yellow
+    Write-Host "Creating distribution package v$VERSION..." -ForegroundColor Yellow
     
     # Create directory structure
     New-Item -ItemType Directory -Force -Path "$DIST\stdlib" | Out-Null
@@ -64,6 +65,9 @@ function Create-Package {
     Get-ChildItem "$ROOT\examples\*.bs" -File | Copy-Item -Destination "$DIST\examples\" -Force
     
     # Copy documentation
+    Copy-Item -Force "$ROOT\README.md" "$DIST\"
+    Copy-Item -Force "$ROOT\LEARN.md" "$DIST\docs\"
+    Copy-Item -Force "$ROOT\VERSION.txt" "$DIST\"
     Copy-Item -Force "$ROOT\compiler\README.md" "$DIST\docs\"
     Copy-Item -Force "$ROOT\compiler\syntax.md" "$DIST\docs\"
     Copy-Item -Force "$ROOT\compiler\safeguards.md" "$DIST\docs\"
@@ -71,10 +75,10 @@ function Create-Package {
     
     # Create version file
     @"
-BASIS Language Compiler v1.0
+BASIS Language Compiler v$VERSION
 Built: $(Get-Date -Format "yyyy-MM-dd")
 
-A pure, deterministic, resource-safe systems language for embedded development.
+A deterministic, resource-aware systems language for embedded development.
 
 Usage:
   basis build <file.bs> [--run]
@@ -83,7 +87,7 @@ Example:
   basis build examples\hello.bs --run
 
 Documentation:
-  See docs\ folder for language reference.
+  See README.md and docs\ folder for language reference.
 "@ | Set-Content "$DIST\README.txt"
     
     # Create batch wrapper for easier use
@@ -101,7 +105,7 @@ Documentation:
     }
     
     # Create ZIP archive
-    $zipPath = "$ROOT\BASIS-v1.0-win64.zip"
+    $zipPath = "$ROOT\BASIS-v$VERSION-win64.zip"
     Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
     Compress-Archive -Path "$DIST\*" -DestinationPath $zipPath
     $zipSize = [math]::Round((Get-Item $zipPath).Length / 1MB, 2)

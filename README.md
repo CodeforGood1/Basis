@@ -2,9 +2,17 @@
 
 > **BASIS** is a deterministic, resource-aware systems programming language for embedded development.
 
-BASIS is built for the kind of embedded software that becomes difficult to trust as projects grow: hidden heap growth, stack surprises, unsafe interrupt behavior, and foreign-function calls whose runtime behavior is unclear. Instead of treating those as late debugging problems, BASIS tries to push more of them into compile-time analysis.
+BASIS is designed for firmware and embedded logic that must stay bounded, predictable, and easier to reason about as systems grow. It focuses on classes of problems that often remain hidden until integration or long running field use, such as unclear stack growth, hidden heap usage, unsafe interrupt paths, and foreign calls whose behavior is not explicit.
 
-Today BASIS compiles to C. The long-term goal is not to replace every systems language, but to provide a constrained environment where critical embedded logic is easier to reason about, bound, test, and integrate with existing C firmware.
+Today BASIS compiles to C so it can fit into existing toolchains and firmware stacks. Its goal is to provide a constrained programming model where important properties of embedded code can be checked earlier, reported clearly, and integrated into existing C based projects without requiring a completely separate runtime ecosystem.
+
+If you are new to the project, start with [LEARN.md](LEARN.md) for a guided introduction before moving to the full reference documentation.
+
+## Why BASIS
+
+Embedded software often compiles successfully long before it becomes easy to trust. As features accumulate, projects can become harder to reason about because resource usage, call depth, interrupt safety, and foreign boundary behavior are spread across multiple files and libraries.
+
+BASIS approaches that problem by making these concerns part of the language and compiler model. Instead of leaving them entirely to manual review and late testing, the compiler performs static checks and resource analysis so more issues can be surfaced before code reaches hardware.
 
 ## What BASIS Looks Like
 
@@ -34,6 +42,8 @@ fn main() -> i32 {
 - strict deterministic module profiles
 - rollover-safe time helpers
 - MMIO-oriented `volatile` register access
+- bit and register helper libraries
+- fixed-size checksum and byte queue libraries
 - explicit foreign-function effect contracts
 - C code generation for host and embedded integration
 
@@ -50,10 +60,32 @@ BASIS already has:
 - persistent-storage budgets through `#[max_storage(...)]`, `#[max_storage_objects(...)]`, and `@storage(...)`
 - time helpers in `stdlib/time`
 - MMIO helpers in `stdlib/mmio`
+- bit and register helpers in `stdlib/bits`
+- fixed-size CRC helpers in `stdlib/crc`
+- fixed-size byte queues in `stdlib/ring`
 - explicit foreign-call contracts such as `@deterministic`, `@blocking`, `@allocates`, `@storage`, `@reentrant`, `@uses_timer`, `@may_fail`, and `@isr_safe`
 - a C backend and local examples/tests
 
-It is best understood today as a serious embedded language prototype moving toward a usable language platform.
+BASIS is an embedded systems language under active development, with a working compiler, static analysis pipeline, and growing support for deterministic and resource-aware firmware use cases.
+
+## What The Latest Pass Added
+
+The most recent compiler pass expanded BASIS beyond basic determinism and call graph analysis into a broader embedded systems model:
+
+- `#[strict]` modules for tighter deterministic subsets
+- `@task(stack=N)` task entry points with explicit task stack budgeting
+- persistent storage budgeting through `#[max_storage(...)]`, `#[max_storage_objects(...)]`, and `@storage(...)`
+- richer foreign effect tracking including `@reentrant`, `@uses_timer`, and `@may_fail`
+- interrupt validation extended to reject persistent storage and non reentrant call paths
+- `stdlib/time` for rollover-aware time helpers
+- `stdlib/mmio` for MMIO-style volatile register access
+- `stdlib/bits` for register masks, packed fields, and alignment helpers
+- `stdlib/crc` for bounded packet integrity helpers
+- `stdlib/ring` for deterministic fixed-size byte queues
+- stronger diagnostics and negative tests for invalid task, storage, strict, ISR, and MMIO usage
+- a learn-the-language guide and versioned release packaging path
+
+These changes make BASIS more applicable to long running embedded systems, RTOS style task based applications, and low level firmware that needs explicit resource and boundary contracts.
 
 ## Getting Started
 
@@ -94,6 +126,9 @@ python compiler/basis.py build examples/time_demo.bs --run
 python compiler/basis.py build examples/task_demo.bs --show-resources --emit-c
 python compiler/basis.py build examples/storage_demo.bs --show-resources --emit-c
 python compiler/basis.py build examples/mmio_demo.bs --emit-c --target esp32
+python compiler/basis.py build examples/bits_demo.bs --run
+python compiler/basis.py build examples/crc_demo.bs --run
+python compiler/basis.py build examples/ring_demo.bs --run
 ```
 
 ### Verify the Install
@@ -101,6 +136,20 @@ python compiler/basis.py build examples/mmio_demo.bs --emit-c --target esp32
 ```bash
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run_local_checks.ps1
 ```
+
+To also verify the packaged Windows release flow:
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run_local_checks.ps1 -VerifyPackage
+```
+
+### Build a Windows Release Package
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Clean -Package
+```
+
+This creates a versioned distribution directory and ZIP archive containing the compiler, examples, standard library, and documentation.
 
 ### Optional: Make `basis` Easy to Run
 
@@ -135,6 +184,8 @@ python compiler/basis.py build --lib control.bs --emit-c --target esp32
 ```
 
 Then compile the generated C with your existing firmware stack, HAL, or SDK.
+
+For embedded workflows, the generated C is intended to be built by your existing platform toolchain. In practice, BASIS can be used to compile analyzable application logic into C and then linked into an ESP IDF, STM32 HAL, RP2040 SDK, or other C based firmware project once the surrounding platform code is provided.
 
 ## Key Features
 
@@ -188,6 +239,7 @@ Program Size Summary:
 | [compiler/syntax.md](compiler/syntax.md) | Complete language syntax reference |
 | [compiler/safeguards.md](compiler/safeguards.md) | Safety guarantees and compile-time checks |
 | [compiler/limitations.md](compiler/limitations.md) | Known limitations and workarounds |
+| [LEARN.md](LEARN.md) | Guided introduction for new users |
 
 ---
 

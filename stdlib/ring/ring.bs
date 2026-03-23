@@ -1,0 +1,87 @@
+// BASIS Standard Library - Fixed-size byte ring buffer
+// Useful for UART RX, packet staging, and bounded byte queues.
+
+const ring_u8x64_capacity_value: u32 = 64 as u32;
+
+public struct RingU8x64 {
+    data: [u8; 64],
+    head: u32,
+    tail: u32,
+    count: u32,
+}
+
+public fn ring_u8x64_init() -> RingU8x64 {
+    return RingU8x64 {
+        data: [0 as u8; 64],
+        head: 0 as u32,
+        tail: 0 as u32,
+        count: 0 as u32,
+    };
+}
+
+public fn ring_u8x64_capacity() -> u32 {
+    return ring_u8x64_capacity_value;
+}
+
+public fn ring_u8x64_clear(buf: *RingU8x64) -> void {
+    buf.head = 0 as u32;
+    buf.tail = 0 as u32;
+    buf.count = 0 as u32;
+}
+
+public fn ring_u8x64_is_empty(buf: *RingU8x64) -> bool {
+    return buf.count == (0 as u32);
+}
+
+public fn ring_u8x64_is_full(buf: *RingU8x64) -> bool {
+    return buf.count == ring_u8x64_capacity_value;
+}
+
+public fn ring_u8x64_count(buf: *RingU8x64) -> u32 {
+    return buf.count;
+}
+
+public fn ring_u8x64_push(buf: *RingU8x64, value: u8) -> bool {
+    if ring_u8x64_is_full(buf) {
+        return false;
+    }
+
+    buf.data[buf.head] = value;
+
+    let next_head: u32 = buf.head + (1 as u32);
+    let wrapped_head: u32 = next_head;
+    if next_head == ring_u8x64_capacity_value {
+        wrapped_head = 0 as u32;
+    }
+    buf.head = wrapped_head;
+
+    buf.count = buf.count + (1 as u32);
+    return true;
+}
+
+public fn ring_u8x64_pop(buf: *RingU8x64, out: *u8) -> bool {
+    if ring_u8x64_is_empty(buf) {
+        return false;
+    }
+
+    *out = buf.data[buf.tail];
+
+    let next_tail: u32 = buf.tail + (1 as u32);
+    let wrapped_tail: u32 = next_tail;
+    if next_tail == ring_u8x64_capacity_value {
+        wrapped_tail = 0 as u32;
+    }
+    buf.tail = wrapped_tail;
+
+    buf.count = buf.count - (1 as u32);
+    return true;
+}
+
+public fn ring_u8x64_peek(buf: *RingU8x64, out: *u8) -> bool {
+    if ring_u8x64_is_empty(buf) {
+        return false;
+    }
+
+    *out = buf.data[buf.tail];
+    return true;
+}
