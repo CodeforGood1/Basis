@@ -1,0 +1,7 @@
+#[max_memory(4kb)]
+import mem::*;
+
+@interrupt
+public fn bad_irq() -> void {
+    let buffer: *u8 = alloc_bytes(16 as u32);
+}

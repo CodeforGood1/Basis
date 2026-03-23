@@ -4,7 +4,9 @@
 #[max_memory(4kb)]
 
 // Runtime print functions (provided by BASIS runtime)
+@stack(64)
 extern fn print_str(s: *u8) -> void;
+@stack(64)
 extern fn print_u32(x: u32) -> void;
 
 // Simulated memory-mapped I/O register address
@@ -30,10 +32,8 @@ fn test_bit(value: u32, bit: u32) -> bool {
 }
 
 // Simple delay loop with bounded iteration
-fn delay(count: i32) -> void @stack(16) {
-    let i: i32 = 0;
-    while i < count {
-        i = i + 1;
+fn delay(count_bounded: i32) -> void @stack(16) {
+    for i in 0..count_bounded {
     }
 }
 

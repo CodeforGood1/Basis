@@ -1,0 +1,10 @@
+#[max_memory(4kb)]
+
+@nondeterministic
+@stack(32)
+extern fn platform_tick() -> u32;
+
+@interrupt
+public fn bad_irq() -> void {
+    let tick: u32 = platform_tick();
+}

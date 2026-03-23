@@ -1,0 +1,9 @@
+#[max_memory(4kb)]
+
+fn main() -> i32 {
+    let count: i32 = 0;
+    while count < 4 {
+        count = count + 1;
+    }
+    return count;
+}

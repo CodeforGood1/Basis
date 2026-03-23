@@ -22,6 +22,7 @@ class Symbol:
     decl_node: ASTNode  # The declaration node
     visibility: Optional[str]  # 'public', 'private', or None (default private)
     scope_level: int  # 0 = module, 1+ = nested scopes
+    module_name: Optional[str] = None
     
     def is_public(self) -> bool:
         """Check if this symbol is publicly visible."""
@@ -258,7 +259,8 @@ class SemanticAnalyzer:
             kind='function',
             decl_node=decl,
             visibility=decl.visibility or 'private',
-            scope_level=0
+            scope_level=0,
+            module_name=self.current_module_name
         )
         
         if not self.current_scope.define(decl.name, symbol):
@@ -283,7 +285,8 @@ class SemanticAnalyzer:
             kind='struct',
             decl_node=decl,
             visibility=decl.visibility or 'private',
-            scope_level=0
+            scope_level=0,
+            module_name=self.current_module_name
         )
         
         if not self.current_scope.define(decl.name, symbol):
@@ -304,7 +307,8 @@ class SemanticAnalyzer:
             kind='const',
             decl_node=decl,
             visibility=decl.visibility or 'private',
-            scope_level=0
+            scope_level=0,
+            module_name=self.current_module_name
         )
         
         if not self.current_scope.define(decl.name, symbol):
@@ -325,7 +329,8 @@ class SemanticAnalyzer:
             kind='extern_static',
             decl_node=decl,
             visibility='public',  # extern statics are always public
-            scope_level=0
+            scope_level=0,
+            module_name=self.current_module_name
         )
         
         if not self.current_scope.define(decl.name, symbol):
@@ -385,7 +390,8 @@ class SemanticAnalyzer:
                     kind='param',
                     decl_node=param,
                     visibility=None,
-                    scope_level=1
+                    scope_level=1,
+                    module_name=self.current_module_name
                 )
                 func_scope.define(param.name, symbol)
             
@@ -511,7 +517,8 @@ class SemanticAnalyzer:
                 kind='let',
                 decl_node=stmt,
                 visibility=None,
-                scope_level=loop_scope.level
+                scope_level=loop_scope.level,
+                module_name=self.current_module_name
             )
             loop_scope.define(stmt.iterator_name, symbol)
             
@@ -578,7 +585,8 @@ class SemanticAnalyzer:
                     kind='let',
                     decl_node=stmt,
                     visibility=None,
-                    scope_level=self.current_scope.level
+                    scope_level=self.current_scope.level,
+                    module_name=self.current_module_name
                 )
                 self.current_scope.define(stmt.name, symbol)
             
@@ -724,7 +732,7 @@ class SemanticAnalyzer:
         """Warn about private functions that are never called."""
         # Skip 'main' — it's the entry point
         entry_points = {'main'}
-        
+
         for name in self._declared_functions:
             if name in entry_points:
                 continue
@@ -737,6 +745,9 @@ class SemanticAnalyzer:
             symbol = self.module_scope.lookup_local(name) if self.module_scope else None
             if symbol and symbol.is_public():
                 continue
+            if symbol and isinstance(symbol.decl_node, FunctionDecl):
+                if any(annotation.name == 'interrupt' for annotation in symbol.decl_node.annotations):
+                    continue
             
             # Private, non-extern, non-called — warn
             if symbol:

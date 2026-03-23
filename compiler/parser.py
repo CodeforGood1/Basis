@@ -749,7 +749,7 @@ class Parser:
         
         # While loop
         if self.match(TokenType.WHILE):
-            return self.parse_while()
+            return self.parse_removed_while()
         
         # Break
         if self.match(TokenType.BREAK):
@@ -884,20 +884,32 @@ class Parser:
         
         return ForStmt(span, iter_token.lexeme, range_start, range_end, body)
     
-    def parse_while(self):
-        """Parse while loop: while condition { body }"""
+    def parse_removed_while(self):
+        """Consume a removed while-loop construct and report a deterministic-language error."""
         start_token = self.current()
         self.expect(TokenType.WHILE, "while loop")
-        
-        condition = self.parse_expression()
-        
-        body = self.parse_block()
-        
-        end_token = self.tokens[self.pos - 1]
+
+        if not self.match(TokenType.LBRACE) and not self.at_eof():
+            self.parse_expression()
+
+        end_token = start_token
+        if self.match(TokenType.LBRACE):
+            body = self.parse_block()
+            end_token = self.tokens[self.pos - 1]
+        else:
+            self.synchronize()
+            if self.pos > 0:
+                end_token = self.tokens[self.pos - 1]
+
+        self.diag.error(
+            'E_WHILE_REMOVED',
+            "while loops are not part of BASIS; use a bounded for loop or recursion with @recursion(max=N)",
+            start_token.line, start_token.column, start_token.length,
+            self.filename
+        )
+
         span = self.make_span(start_token, end_token)
-        
-        # max_iterations will be filled in by loop_analysis from @bounded annotation
-        return WhileStmt(span, condition, body, max_iterations=None)
+        return Block(span, [])
     
     # ========================================================================
     # Expression Parsing (Precedence Climbing)

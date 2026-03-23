@@ -91,7 +91,10 @@ public fn is_negative_i32(x: i32) -> bool {
 public fn gcd(a: i32, b: i32) -> i32 {
     let x: i32 = abs_i32(a);
     let y: i32 = abs_i32(b);
-    while y != 0 {
+    for step in 0..64 {
+        if y == 0 {
+            return x;
+        }
         let temp: i32 = y;
         y = x - ((x / y) * y);
         x = temp;
@@ -118,19 +121,7 @@ public fn is_power_of_two(x: i32) -> bool {
     if x <= 0 {
         return false;
     }
-    // x & (x-1) == 0 means power of two, using subtraction trick
-    let check: i32 = x - 1;
-    // Manual bit check: if x AND (x-1) == 0
-    // Since we don't have & yet, use division approach
-    let val: i32 = x;
-    while val > 1 {
-        let half: i32 = val / 2;
-        if half * 2 != val {
-            return false;
-        }
-        val = half;
-    }
-    return true;
+    return (x & (x - 1)) == 0;
 }
 
 // ============================================================================

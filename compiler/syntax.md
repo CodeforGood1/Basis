@@ -136,10 +136,12 @@ fn fill_data(out: *u8) -> void { ... }      // Use out parameter
 
 ### Extern Functions (C Interop)
 ```basis
-extern fn malloc(size: u32) -> *u8;
-extern fn free(ptr: *u8) -> void;
-extern fn printf(fmt: *u8) -> i32 = "printf";  // With alias
+@stack(64) extern fn malloc(size: u32) -> *u8;
+@stack(64) extern fn free(ptr: *u8) -> void;
+@stack(64) extern fn printf(fmt: *u8) -> i32 = "printf";  // With alias
 ```
+
+Every `extern fn` must declare `@stack(N)` so the compiler can include foreign calls in the whole-program stack graph.
 
 ### Structs
 ```basis
@@ -258,9 +260,8 @@ for i in start..end {
 
 **While Loop:**
 ```basis
-while condition {
-    // Loop body
-}
+// Not supported.
+// Replace with a bounded for loop or recursion with @recursion(max=N).
 ```
 
 ### Return
@@ -284,6 +285,23 @@ fn factorial(n: i32) -> i32 {
     return n * factorial(n - 1);
 }
 ```
+
+### Stack Annotation
+```basis
+@stack(64) extern fn board_crc(seed: u32) -> u32;
+```
+
+`@stack(N)` is required on `extern fn` declarations and can also be used as a budget on normal functions.
+
+### Interrupt Annotation
+```basis
+@interrupt
+public fn systick_handler() -> void {
+    return;
+}
+```
+
+`@interrupt` handlers must be `public`, take no parameters, return `void`, allocate no heap, and only call deterministic ISR-safe code.
 
 ---
 

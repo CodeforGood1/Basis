@@ -1,754 +1,1109 @@
 """
-BASIS Resource Analysis
-Statically computes and validates resource usage per function.
-Analyzes stack, heap, and recursion at compile time.
+BASIS Program Resource Analysis
+Builds a whole-program call graph and computes stack, heap, determinism,
+and ISR-safety metadata for every function.
 """
 
-from typing import Dict, Set, Optional, List, Tuple
-from dataclasses import dataclass
-from ast_defs import *
-from diagnostics import DiagnosticEngine
-from sema import Scope, Symbol
-from typecheck import TypeChecker, BasisType, IntType, FloatType, BoolType, PointerType, ArrayType, StructType
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Set, Tuple
+
+from ast_defs import (
+    AddressOfExpr,
+    Annotation,
+    AssignmentExpr,
+    BinaryExpr,
+    Block,
+    CallExpr,
+    CastExpr,
+    DereferenceExpr,
+    ExprStmt,
+    Expression,
+    FieldAccessExpr,
+    ForStmt,
+    FunctionDecl,
+    IdentifierExpr,
+    IfStmt,
+    IndexExpr,
+    LetDecl,
+    LiteralExpr,
+    Module,
+    ReturnStmt,
+    SourceSpan,
+    UnaryExpr,
+    WhileStmt,
+    parse_int_literal,
+)
 from consteval import ConstantEvaluator, IntConstant
+from diagnostics import DiagnosticEngine
 from loop_analysis import LoopAnalyzer
+from sema import Scope
+from typecheck import (
+    ArrayType as ResolvedArrayType,
+    BasisType,
+    BoolType,
+    FloatType,
+    IntType,
+    PointerType as ResolvedPointerType,
+    StructType,
+    TypeChecker,
+    VoidType,
+)
 
-
-# ============================================================================
-# Resource Metadata
-# ============================================================================
 
 @dataclass
 class FunctionResource:
-    """Resource usage metadata for a function."""
+    frame_stack_bytes: int
     stack_bytes: int
     heap_bytes: int
-    recursion_depth: Optional[int]  # None if non-recursive
-    
-    def __repr__(self):
-        rec = f", recursion_depth={self.recursion_depth}" if self.recursion_depth else ""
-        return f"FunctionResource(stack={self.stack_bytes}B, heap={self.heap_bytes}B{rec})"
+    recursion_depth: Optional[int]
+    deterministic: bool
+    isr_safe: bool
+    is_interrupt: bool
+    call_path: List[str] = field(default_factory=list)
 
 
-# ============================================================================
-# Call Graph for Recursion Detection
-# ============================================================================
+@dataclass
+class FunctionInfo:
+    qualified_name: str
+    module_name: str
+    decl: FunctionDecl
+    scope: Scope
+    type_checker: TypeChecker
+    const_eval: ConstantEvaluator
+    loop_analyzer: LoopAnalyzer
+    frame_stack_bytes: int = 0
+    stack_bytes: int = 0
+    local_heap_bytes: int = 0
+    total_heap_bytes: int = 0
+    recursion_depth: Optional[int] = None
+    deterministic: bool = True
+    isr_safe: bool = False
+    is_interrupt: bool = False
+    direct_calls: Set[str] = field(default_factory=set)
+    call_path: List[str] = field(default_factory=list)
+
+    @property
+    def name(self) -> str:
+        return self.decl.name
+
+    @property
+    def is_extern(self) -> bool:
+        return self.decl.is_extern
+
+
+@dataclass
+class CallComponent:
+    members: List[str]
+    is_recursive: bool
+    recursion_depth: Optional[int] = None
+    outgoing_components: Set[int] = field(default_factory=set)
+
 
 class CallGraph:
-    """Builds and analyzes function call graph for recursion detection."""
-    
+    """Whole-program function call graph."""
+
     def __init__(self):
-        # Function name -> set of called function names
         self.calls: Dict[str, Set[str]] = {}
-        
-        # Detected cycles
-        self.cycles: List[List[str]] = []
-    
+
+    def add_node(self, node: str):
+        self.calls.setdefault(node, set())
+
     def add_call(self, caller: str, callee: str):
-        """Record a function call."""
-        if caller not in self.calls:
-            self.calls[caller] = set()
+        self.add_node(caller)
+        self.add_node(callee)
         self.calls[caller].add(callee)
-    
-    def detect_cycles(self) -> List[List[str]]:
-        """Detect all cycles in the call graph."""
-        visited = set()
-        rec_stack = set()
-        self.cycles = []
-        
-        def dfs(node: str, path: List[str]):
-            # Prevent infinite recursion on nodes not in call graph
-            if node not in self.calls and node not in visited:
-                visited.add(node)
-                return
-            
-            if node in rec_stack:
-                # Found a cycle
-                cycle_start = path.index(node)
-                cycle = path[cycle_start:]
-                self.cycles.append(cycle)
-                return
-            
-            if node in visited:
-                return
-            
-            visited.add(node)
-            rec_stack.add(node)
-            path.append(node)
-            
-            if node in self.calls:
-                for callee in self.calls[node]:
-                    dfs(callee, path[:])
-            
-            rec_stack.remove(node)
-        
-        for func in self.calls.keys():
-            if func not in visited:
-                dfs(func, [])
-        
-        return self.cycles
-    
-    def is_recursive(self, func_name: str) -> bool:
-        """Check if a function is involved in recursion."""
-        for cycle in self.cycles:
-            if func_name in cycle:
-                return True
-        return False
-    
-    def get_cycle_for_function(self, func_name: str) -> Optional[List[str]]:
-        """Get the recursion cycle containing this function."""
-        for cycle in self.cycles:
-            if func_name in cycle:
-                return cycle
-        return None
+
+    def neighbors(self, node: str) -> Set[str]:
+        return self.calls.get(node, set())
+
+    def nodes(self) -> List[str]:
+        return sorted(self.calls.keys())
+
+    def strongly_connected_components(self) -> List[List[str]]:
+        """Tarjan SCC decomposition."""
+        index = 0
+        stack: List[str] = []
+        indices: Dict[str, int] = {}
+        lowlinks: Dict[str, int] = {}
+        on_stack: Set[str] = set()
+        components: List[List[str]] = []
+
+        def strongconnect(node: str):
+            nonlocal index
+
+            indices[node] = index
+            lowlinks[node] = index
+            index += 1
+            stack.append(node)
+            on_stack.add(node)
+
+            for neighbor in sorted(self.neighbors(node)):
+                if neighbor not in indices:
+                    strongconnect(neighbor)
+                    lowlinks[node] = min(lowlinks[node], lowlinks[neighbor])
+                elif neighbor in on_stack:
+                    lowlinks[node] = min(lowlinks[node], indices[neighbor])
+
+            if lowlinks[node] == indices[node]:
+                component: List[str] = []
+                while stack:
+                    member = stack.pop()
+                    on_stack.remove(member)
+                    component.append(member)
+                    if member == node:
+                        break
+                components.append(sorted(component))
+
+        for node in self.nodes():
+            if node not in indices:
+                strongconnect(node)
+
+        return components
 
 
-# ============================================================================
-# Resource Analyzer
-# ============================================================================
+class ProgramResourceAnalyzer:
+    _DIRECT_ALLOCATORS = {
+        "alloc",
+        "malloc",
+        "alloc_bytes",
+        "alloc_u8",
+        "alloc_i32",
+        "alloc_u32",
+        "alloc_i64",
+        "alloc_zeroed",
+    }
+    _ALLOC_WRAPPERS = {
+        "alloc_bytes",
+        "alloc_u8",
+        "alloc_i32",
+        "alloc_u32",
+        "alloc_i64",
+        "alloc_zeroed",
+        "free_bytes",
+        "mem_copy",
+        "mem_zero",
+        "mem_set",
+    }
 
-class ResourceAnalyzer:
-    """
-    Analyzes stack, heap, and recursion resource usage.
-    Computes compile-time bounds for all functions.
-    """
-    
-    def __init__(self, diag_engine: DiagnosticEngine,
-                 type_checker: TypeChecker,
-                 const_eval: ConstantEvaluator,
-                 loop_analyzer: LoopAnalyzer,
-                 module_scope: Scope):
+    def __init__(
+        self,
+        diag_engine: DiagnosticEngine,
+        modules: Dict[str, Module],
+        module_scopes: Dict[str, Scope],
+        type_checkers: Dict[str, TypeChecker],
+        const_evaluators: Dict[str, ConstantEvaluator],
+        loop_analyzers: Dict[str, LoopAnalyzer],
+    ):
         self.diag = diag_engine
-        self.type_checker = type_checker
-        self.const_eval = const_eval
-        self.loop_analyzer = loop_analyzer
-        self.module_scope = module_scope
-        
-        # Function resources: name -> FunctionResource
+        self.modules = modules
+        self.module_scopes = module_scopes
+        self.type_checkers = type_checkers
+        self.const_evaluators = const_evaluators
+        self.loop_analyzers = loop_analyzers
+
+        self.functions: Dict[str, FunctionInfo] = {}
         self.resources: Dict[str, FunctionResource] = {}
-        
-        # Call graph for recursion detection
         self.call_graph = CallGraph()
-        
-        # Current analysis context
-        self.current_function: Optional[str] = None
-        self.current_module_name: str = ""
-        
-        # Bounded parameters for current function
-        self.bounded_params: Dict[str, int] = {}
-        
-        # Track local variable values (for allocation size tracking)
-        self.tracked_local_values: Dict[str, int] = {}
-        
-        # Track if we're inside a loop
-        self.current_loop_bound: Optional[int] = None
-    
-    # ========================================================================
-    # Main Entry Point
-    # ========================================================================
-    
-    def analyze(self, module: Module) -> bool:
-        """
-        Analyze all functions in the module.
-        Returns True if successful (no errors).
-        """
-        self.current_module_name = module.name
-        
-        # First pass: build call graph and extract annotations
-        for decl in module.declarations:
-            if isinstance(decl, FunctionDecl):
-                self._build_call_graph(decl)
-        
-        # Detect recursion cycles
-        self.call_graph.detect_cycles()
-        
-        # Second pass: analyze resources
-        for decl in module.declarations:
-            if isinstance(decl, FunctionDecl):
-                self._analyze_function(decl)
-        
+
+        self.components: List[CallComponent] = []
+        self.function_to_component: Dict[str, int] = {}
+
+        self._node_stack_cache: Dict[str, Tuple[int, List[str]]] = {}
+        self._component_stack_cache: Dict[int, Tuple[int, List[str]]] = {}
+        self._component_effect_cache: Dict[int, Tuple[bool, bool]] = {}
+        self._heap_cache: Dict[str, int] = {}
+
+        self.total_stack_bytes = 0
+        self.total_heap_bytes = 0
+        self.deepest_stack_path: List[str] = []
+
+    def analyze(self) -> bool:
+        self._collect_functions()
+        self._build_call_graph()
+        self._build_components()
+        self._compute_frame_sizes()
+        self._validate_recursive_components()
+        self._compute_stack_usage()
+        self._compute_local_heap_usage()
+        self._validate_recursive_heap_usage()
+        self._compute_total_heap_usage()
+        self._compute_effects()
+        self._validate_interrupts()
+        self._apply_stack_budgets()
+        self._finalize_resources()
         return not self.diag.has_errors()
-    
-    # ========================================================================
-    # Call Graph Building
-    # ========================================================================
-    
-    def _build_call_graph(self, func: FunctionDecl):
-        """Build call graph for a function."""
-        self.current_function = func.name
-        
-        if func.body:
-            self._extract_calls(func.body)
-        
-        self.current_function = None
-    
-    def _extract_calls(self, node):
-        """Extract function calls from AST node."""
+
+    def get_resource(self, qualified_name: str) -> Optional[FunctionResource]:
+        return self.resources.get(qualified_name)
+
+    def get_all_resources(self) -> Dict[str, FunctionResource]:
+        return self.resources.copy()
+
+    def get_module_resources(self, module_name: str) -> Dict[str, FunctionResource]:
+        prefix = f"{module_name}::"
+        return {
+            qualified_name[len(prefix):]: resource
+            for qualified_name, resource in self.resources.items()
+            if qualified_name.startswith(prefix)
+        }
+
+    def get_total_stack(self) -> int:
+        return self.total_stack_bytes
+
+    def get_total_heap(self) -> int:
+        return self.total_heap_bytes
+
+    def get_deepest_stack_path(self) -> List[str]:
+        return list(self.deepest_stack_path)
+
+    def get_recursive_cycles(self) -> List[List[str]]:
+        return [list(component.members) for component in self.components if component.is_recursive]
+
+    def _collect_functions(self):
+        for module_name, module in self.modules.items():
+            for decl in module.declarations:
+                if not isinstance(decl, FunctionDecl):
+                    continue
+
+                qualified_name = self._qualified_name(module_name, decl.name)
+                info = FunctionInfo(
+                    qualified_name=qualified_name,
+                    module_name=module_name,
+                    decl=decl,
+                    scope=self.module_scopes[module_name],
+                    type_checker=self.type_checkers[module_name],
+                    const_eval=self.const_evaluators[module_name],
+                    loop_analyzer=self.loop_analyzers[module_name],
+                    is_interrupt=self._has_annotation(decl.annotations, "interrupt"),
+                )
+                self.functions[qualified_name] = info
+                self.call_graph.add_node(qualified_name)
+
+    def _build_call_graph(self):
+        for info in self.functions.values():
+            if info.decl.body:
+                self._extract_calls(info, info.decl.body)
+
+    def _extract_calls(self, info: FunctionInfo, node):
         if isinstance(node, CallExpr):
-            if isinstance(node.callee, IdentifierExpr):
-                callee_name = node.callee.name
-                assert self.current_function is not None
-                self.call_graph.add_call(self.current_function, callee_name)
-            for arg in node.arguments:
-                self._extract_calls(arg)
+            target = self._resolve_call_target(info.module_name, node)
+            if target:
+                info.direct_calls.add(target)
+                self.call_graph.add_call(info.qualified_name, target)
+            for argument in node.arguments:
+                self._extract_calls(info, argument)
             return
-        
-        # Recursively traverse statements
+
         if isinstance(node, Block):
-            for stmt in node.statements:
-                self._extract_calls(stmt)
+            for statement in node.statements:
+                self._extract_calls(info, statement)
         elif isinstance(node, LetDecl):
             if node.initializer:
-                self._extract_calls(node.initializer)
+                self._extract_calls(info, node.initializer)
         elif isinstance(node, ForStmt):
-            self._extract_calls(node.body)
+            self._extract_calls(info, node.range_start)
+            self._extract_calls(info, node.range_end)
+            self._extract_calls(info, node.body)
         elif isinstance(node, WhileStmt):
-            self._extract_calls(node.condition)
-            self._extract_calls(node.body)
+            self._extract_calls(info, node.condition)
+            self._extract_calls(info, node.body)
         elif isinstance(node, IfStmt):
-            self._extract_calls(node.condition)
-            self._extract_calls(node.then_block)
-            for elif_branch in node.elif_branches:
-                self._extract_calls(elif_branch.condition)
-                self._extract_calls(elif_branch.block)
+            self._extract_calls(info, node.condition)
+            self._extract_calls(info, node.then_block)
+            for branch in node.elif_branches:
+                self._extract_calls(info, branch.condition)
+                self._extract_calls(info, branch.block)
             if node.else_block:
-                self._extract_calls(node.else_block)
+                self._extract_calls(info, node.else_block)
         elif isinstance(node, ExprStmt):
-            self._extract_calls(node.expression)
+            self._extract_calls(info, node.expression)
         elif isinstance(node, ReturnStmt):
             if node.value:
-                self._extract_calls(node.value)
-        # Expressions
+                self._extract_calls(info, node.value)
         elif isinstance(node, BinaryExpr):
-            self._extract_calls(node.left)
-            self._extract_calls(node.right)
+            self._extract_calls(info, node.left)
+            self._extract_calls(info, node.right)
         elif isinstance(node, UnaryExpr):
-            self._extract_calls(node.operand)
+            self._extract_calls(info, node.operand)
         elif isinstance(node, AssignmentExpr):
-            self._extract_calls(node.target)
-            self._extract_calls(node.value)
+            self._extract_calls(info, node.target)
+            self._extract_calls(info, node.value)
         elif isinstance(node, IndexExpr):
-            self._extract_calls(node.base)
-            self._extract_calls(node.index)
+            self._extract_calls(info, node.base)
+            self._extract_calls(info, node.index)
         elif isinstance(node, FieldAccessExpr):
-            self._extract_calls(node.base)
+            self._extract_calls(info, node.base)
         elif isinstance(node, CastExpr):
-            self._extract_calls(node.expression)
+            self._extract_calls(info, node.expression)
         elif isinstance(node, AddressOfExpr):
-            self._extract_calls(node.operand)
+            self._extract_calls(info, node.operand)
         elif isinstance(node, DereferenceExpr):
-            self._extract_calls(node.operand)
-    
-    # ========================================================================
-    # Function Analysis
-    # ========================================================================
-    
-    def _analyze_function(self, func: FunctionDecl):
-        """Analyze resource usage for a function."""
-        self.current_function = func.name
-        
-        # Extract bounded parameters
-        self.bounded_params.clear()
-        self.tracked_local_values.clear()
-        for param in func.params:
-            if param.name.endswith('_bounded'):
-                self.bounded_params[param.name] = 1000  # Demo value
-        
-        # Check for recursion
-        is_recursive = self.call_graph.is_recursive(func.name)
-        recursion_depth = None
-        
-        if is_recursive:
-            # Must have @recursion annotation
-            recursion_depth = self._get_recursion_annotation(func)
-            if recursion_depth is None:
-                cycle = self.call_graph.get_cycle_for_function(func.name)
-                cycle_str = " -> ".join(cycle + [cycle[0]]) if cycle else func.name
-                self._error("E_MISSING_RECURSION_ANNOTATION",
-                           f"recursive function '{func.name}' missing @recursion(max=N) annotation (cycle: {cycle_str})",
-                           func.span)
-                # Continue analysis with dummy value to find other errors
-                recursion_depth = 1
-        
-        # Calculate stack usage
-        stack_bytes = 0
-        if func.body:
-            stack_bytes = self._calculate_stack_usage(func)
-        
-        # Calculate heap usage
-        # Skip for allocation wrapper functions (they forward to malloc, heap tracked at call site)
-        heap_bytes = 0
-        alloc_wrappers = {"alloc_bytes", "alloc_u8", "alloc_i32", "alloc_u32", "alloc_i64",
-                          "alloc_zeroed", "free_bytes", "mem_copy", "mem_zero"}
-        if func.body and func.name not in alloc_wrappers:
-            heap_bytes = self._calculate_heap_usage(func.body)
-        
-        # Adjust for recursion
-        if is_recursive and recursion_depth:
-            stack_bytes *= recursion_depth
-            heap_bytes *= recursion_depth
-        
-        # Store results
-        self.resources[func.name] = FunctionResource(
-            stack_bytes=stack_bytes,
-            heap_bytes=heap_bytes,
-            recursion_depth=recursion_depth
+            self._extract_calls(info, node.operand)
+
+    def _resolve_call_target(self, module_name: str, call: CallExpr) -> Optional[str]:
+        if isinstance(call.callee, IdentifierExpr):
+            symbol = self.module_scopes[module_name].lookup(call.callee.name)
+            if symbol and isinstance(symbol.decl_node, FunctionDecl):
+                target_module = symbol.module_name or module_name
+                return self._qualified_name(target_module, symbol.decl_node.name)
+        return None
+
+    def _build_components(self):
+        for index, members in enumerate(self.call_graph.strongly_connected_components()):
+            recursive = len(members) > 1
+            if not recursive and members:
+                recursive = members[0] in self.call_graph.neighbors(members[0])
+
+            component = CallComponent(members=members, is_recursive=recursive)
+            self.components.append(component)
+            for member in members:
+                self.function_to_component[member] = index
+
+        for index, component in enumerate(self.components):
+            for member in component.members:
+                for callee in self.call_graph.neighbors(member):
+                    target = self.function_to_component[callee]
+                    if target != index:
+                        component.outgoing_components.add(target)
+
+    def _compute_frame_sizes(self):
+        for info in self.functions.values():
+            if info.is_extern:
+                stack_value = self._required_stack_annotation(info)
+                info.frame_stack_bytes = stack_value or 0
+            else:
+                info.frame_stack_bytes = self._calculate_stack_usage(info)
+
+    def _validate_recursive_components(self):
+        for component in self.components:
+            if not component.is_recursive:
+                continue
+
+            depths: Set[int] = set()
+            for member in component.members:
+                info = self.functions[member]
+                depth = self._recursion_annotation(info)
+                if depth is None:
+                    self._error(
+                        "E_MISSING_RECURSION_ANNOTATION",
+                        f"recursive cycle requires @recursion(max=N): {' -> '.join(component.members)}",
+                        info.decl.span,
+                        info.module_name,
+                    )
+                    continue
+                depths.add(depth)
+                info.recursion_depth = depth
+
+            if len(depths) > 1:
+                info = self.functions[component.members[0]]
+                self._error(
+                    "E_RECURSION_DEPTH_MISMATCH",
+                    f"recursive cycle members must use the same @recursion(max=N): {' -> '.join(component.members)}",
+                    info.decl.span,
+                    info.module_name,
+                )
+            elif depths:
+                component.recursion_depth = next(iter(depths))
+
+    def _compute_stack_usage(self):
+        for qualified_name, info in self.functions.items():
+            stack_bytes, path = self._node_stack(qualified_name)
+            info.stack_bytes = stack_bytes
+            info.call_path = path
+
+    def _node_stack(self, qualified_name: str) -> Tuple[int, List[str]]:
+        if qualified_name in self._node_stack_cache:
+            return self._node_stack_cache[qualified_name]
+
+        component_index = self.function_to_component[qualified_name]
+        component = self.components[component_index]
+        if component.is_recursive:
+            result = self._component_stack(component_index)
+            self._node_stack_cache[qualified_name] = result
+            return result
+
+        info = self.functions[qualified_name]
+        best_stack = 0
+        best_path: List[str] = []
+        for callee in sorted(info.direct_calls):
+            callee_stack, callee_path = self._node_stack(callee)
+            if callee_stack > best_stack:
+                best_stack = callee_stack
+                best_path = callee_path
+
+        result = (info.frame_stack_bytes + best_stack, [qualified_name] + best_path)
+        self._node_stack_cache[qualified_name] = result
+        return result
+
+    def _component_stack(self, component_index: int) -> Tuple[int, List[str]]:
+        if component_index in self._component_stack_cache:
+            return self._component_stack_cache[component_index]
+
+        component = self.components[component_index]
+        cycle_stack = sum(
+            self.functions[member].frame_stack_bytes
+            for member in component.members
         )
-        
-        # Validate @stack(N) budget if annotated
-        stack_budget = self._get_stack_annotation(func)
-        if stack_budget is not None and stack_bytes > stack_budget:
-            self._warning("W_STACK_BUDGET_EXCEEDED",
-                         f"function '{func.name}' uses {stack_bytes}B stack, "
-                         f"exceeds @stack({stack_budget}) budget",
-                         func.span)
-        
-        self.current_function = None
-        self.bounded_params.clear()
-    
-    def _get_recursion_annotation(self, func: FunctionDecl) -> Optional[int]:
-        """Extract recursion depth from @recursion annotation."""
-        for annotation in func.annotations:
-            if annotation.name == "recursion":
-                # Support @recursion(max=N) or @recursion(N)
-                arg = annotation.arguments.get('max') or annotation.arguments.get('value')
-                if arg is None:
-                    self._error("E_INVALID_RECURSION_ANNOTATION",
-                               "@recursion annotation requires argument: @recursion(max=N)",
-                               annotation.span)
-                    return None
-                
-                try:
-                    value = self.const_eval.eval_constant(arg)
-                    if isinstance(value, IntConstant):
-                        if value.value <= 0:
-                            self._error("E_INVALID_RECURSION_ANNOTATION",
-                                       f"@recursion max depth must be positive, got {value.value}",
-                                       annotation.span)
-                            return None
-                        return value.value
-                    else:
-                        self._error("E_INVALID_RECURSION_ANNOTATION",
-                                   "@recursion max must be an integer constant",
-                                   annotation.span)
-                        return None
-                except (ValueError, TypeError):
-                    self._error("E_INVALID_RECURSION_ANNOTATION",
-                               "@recursion max must be a compile-time constant",
-                               annotation.span)
-                    return None
-        
-        return None
-    
-    def _get_stack_annotation(self, func: FunctionDecl) -> Optional[int]:
-        """Extract stack budget from @stack annotation."""
-        for annotation in func.annotations:
-            if annotation.name == "stack":
-                arg = annotation.arguments.get('value')
-                if arg is None:
-                    self._error("E_INVALID_STACK_ANNOTATION",
-                               "@stack annotation requires argument: @stack(N)",
-                               annotation.span)
-                    return None
-                try:
-                    value = self.const_eval.eval_constant(arg)
-                    if isinstance(value, IntConstant):
-                        return value.value
-                except (ValueError, TypeError):
-                    pass
-                return None
-        return None
-    
-    # ========================================================================
-    # Stack Usage Calculation
-    # ========================================================================
-    
-    def _calculate_stack_usage(self, func: FunctionDecl) -> int:
-        """Calculate stack usage for a function."""
+        if component.recursion_depth:
+            cycle_stack *= component.recursion_depth
+
+        best_stack = 0
+        best_path: List[str] = []
+        for target in sorted(component.outgoing_components):
+            if self.components[target].is_recursive:
+                target_stack, target_path = self._component_stack(target)
+            else:
+                target_stack, target_path = self._node_stack(self.components[target].members[0])
+            if target_stack > best_stack:
+                best_stack = target_stack
+                best_path = target_path
+
+        label = self._recursive_label(component)
+        result = (cycle_stack + best_stack, [label] + best_path)
+        self._component_stack_cache[component_index] = result
+        return result
+
+    def _recursive_label(self, component: CallComponent) -> str:
+        depth = component.recursion_depth or 1
+        return f"[recursive {' -> '.join(component.members)} x{depth}]"
+
+    def _compute_local_heap_usage(self):
+        for info in self.functions.values():
+            if info.is_extern or not info.decl.body or info.name in self._ALLOC_WRAPPERS:
+                info.local_heap_bytes = 0
+                continue
+
+            tracked_values: Dict[str, int] = {}
+            info.local_heap_bytes = self._calculate_heap_usage(
+                info,
+                info.decl.body,
+                include_calls=False,
+                tracked_values=tracked_values,
+                bounded_params=self._bounded_params(info.decl),
+                visiting={info.qualified_name},
+            )
+
+    def _validate_recursive_heap_usage(self):
+        for component in self.components:
+            if not component.is_recursive:
+                continue
+            for member in component.members:
+                info = self.functions[member]
+                if info.local_heap_bytes > 0:
+                    self._error(
+                        "E_RECURSIVE_HEAP",
+                        f"recursive function '{info.name}' cannot allocate heap memory",
+                        info.decl.span,
+                        info.module_name,
+                    )
+
+    def _compute_total_heap_usage(self):
+        for qualified_name, info in self.functions.items():
+            info.total_heap_bytes = self._heap_for_function(qualified_name, visiting=set())
+
+    def _heap_for_function(self, qualified_name: str, visiting: Set[str]) -> int:
+        if qualified_name in self._heap_cache:
+            return self._heap_cache[qualified_name]
+
+        if qualified_name in visiting:
+            return 0
+
+        info = self.functions[qualified_name]
+        if info.is_extern or not info.decl.body or info.name in self._ALLOC_WRAPPERS:
+            self._heap_cache[qualified_name] = 0
+            return 0
+
+        tracked_values: Dict[str, int] = {}
+        total_heap = self._calculate_heap_usage(
+            info,
+            info.decl.body,
+            include_calls=True,
+            tracked_values=tracked_values,
+            bounded_params=self._bounded_params(info.decl),
+            visiting=visiting | {qualified_name},
+        )
+        self._heap_cache[qualified_name] = total_heap
+        return total_heap
+
+    def _calculate_heap_usage(
+        self,
+        info: FunctionInfo,
+        node,
+        include_calls: bool,
+        tracked_values: Dict[str, int],
+        bounded_params: Dict[str, int],
+        visiting: Set[str],
+    ) -> int:
         total = 0
-        
-        # Add parameter sizes
-        for param in func.params:
-            param_type = self.type_checker._resolve_type(param.type)
+
+        if isinstance(node, Block):
+            for statement in node.statements:
+                total += self._calculate_heap_usage(
+                    info, statement, include_calls, tracked_values, bounded_params, visiting
+                )
+
+        elif isinstance(node, ForStmt):
+            loop_bound = info.loop_analyzer.get_loop_bound(node)
+            if not loop_bound:
+                self._error(
+                    "E_UNBOUNDED_LOOP",
+                    "for loop bound could not be determined during heap analysis",
+                    node.span,
+                    info.module_name,
+                )
+                return total
+
+            body_heap = self._calculate_heap_usage(
+                info,
+                node.body,
+                include_calls,
+                tracked_values.copy(),
+                bounded_params,
+                visiting,
+            )
+            total += body_heap * loop_bound.max_iterations
+
+        elif isinstance(node, WhileStmt):
+            self._error(
+                "E_WHILE_REMOVED",
+                "while loops are not part of BASIS",
+                node.span,
+                info.module_name,
+            )
+
+        elif isinstance(node, IfStmt):
+            branch_max = self._calculate_heap_usage(
+                info,
+                node.then_block,
+                include_calls,
+                tracked_values.copy(),
+                bounded_params,
+                visiting,
+            )
+            for branch in node.elif_branches:
+                branch_max = max(
+                    branch_max,
+                    self._calculate_heap_usage(
+                        info,
+                        branch.block,
+                        include_calls,
+                        tracked_values.copy(),
+                        bounded_params,
+                        visiting,
+                    ),
+                )
+            if node.else_block:
+                branch_max = max(
+                    branch_max,
+                    self._calculate_heap_usage(
+                        info,
+                        node.else_block,
+                        include_calls,
+                        tracked_values.copy(),
+                        bounded_params,
+                        visiting,
+                    ),
+                )
+            total += branch_max
+
+        elif isinstance(node, ExprStmt):
+            total += self._expr_heap(info, node.expression, include_calls, tracked_values, bounded_params, visiting)
+
+        elif isinstance(node, LetDecl):
+            if node.initializer:
+                total += self._expr_heap(info, node.initializer, include_calls, tracked_values, bounded_params, visiting)
+                init_value = self._evaluate_alloc_size(info, node.initializer, tracked_values, bounded_params)
+                if init_value is not None:
+                    tracked_values[node.name] = init_value
+
+        elif isinstance(node, ReturnStmt):
+            if node.value:
+                total += self._expr_heap(info, node.value, include_calls, tracked_values, bounded_params, visiting)
+
+        return total
+
+    def _expr_heap(
+        self,
+        info: FunctionInfo,
+        expr: Expression,
+        include_calls: bool,
+        tracked_values: Dict[str, int],
+        bounded_params: Dict[str, int],
+        visiting: Set[str],
+    ) -> int:
+        total = 0
+
+        if isinstance(expr, CallExpr):
+            direct_alloc = self._direct_alloc_bytes(info, expr, tracked_values, bounded_params)
+            if direct_alloc is not None:
+                total += direct_alloc
+            elif include_calls:
+                callee = self._resolve_call_target(info.module_name, expr)
+                if callee and callee not in visiting:
+                    total += self._heap_for_function(callee, visiting)
+
+            for argument in expr.arguments:
+                total += self._expr_heap(info, argument, include_calls, tracked_values, bounded_params, visiting)
+
+        elif isinstance(expr, BinaryExpr):
+            total += self._expr_heap(info, expr.left, include_calls, tracked_values, bounded_params, visiting)
+            total += self._expr_heap(info, expr.right, include_calls, tracked_values, bounded_params, visiting)
+
+        elif isinstance(expr, UnaryExpr):
+            total += self._expr_heap(info, expr.operand, include_calls, tracked_values, bounded_params, visiting)
+
+        elif isinstance(expr, AssignmentExpr):
+            total += self._expr_heap(info, expr.target, include_calls, tracked_values, bounded_params, visiting)
+            total += self._expr_heap(info, expr.value, include_calls, tracked_values, bounded_params, visiting)
+
+        return total
+
+    def _direct_alloc_bytes(
+        self,
+        info: FunctionInfo,
+        expr: CallExpr,
+        tracked_values: Dict[str, int],
+        bounded_params: Dict[str, int],
+    ) -> Optional[int]:
+        if not isinstance(expr.callee, IdentifierExpr):
+            return None
+
+        callee_name = expr.callee.name
+        if callee_name not in self._DIRECT_ALLOCATORS:
+            return None
+
+        if callee_name == "alloc" and len(expr.arguments) >= 2:
+            alloc_size = self._evaluate_alloc_size(info, expr.arguments[1], tracked_values, bounded_params)
+            if alloc_size is None:
+                self._error(
+                    "E_UNBOUNDED_HEAP",
+                    "allocation size must be a compile-time constant or bounded parameter",
+                    expr.arguments[1].span,
+                    info.module_name,
+                )
+                return 0
+            return alloc_size
+
+        if callee_name in ("malloc", "alloc_bytes", "alloc_u8", "alloc_zeroed") and len(expr.arguments) >= 1:
+            alloc_size = self._evaluate_alloc_size(info, expr.arguments[0], tracked_values, bounded_params)
+            if alloc_size is None:
+                self._error(
+                    "E_UNBOUNDED_HEAP",
+                    "allocation size must be a compile-time constant or bounded parameter",
+                    expr.arguments[0].span,
+                    info.module_name,
+                )
+                return 0
+            return alloc_size
+
+        if callee_name == "alloc_i32" and len(expr.arguments) >= 1:
+            count = self._evaluate_alloc_size(info, expr.arguments[0], tracked_values, bounded_params)
+            if count is None:
+                self._error(
+                    "E_UNBOUNDED_HEAP",
+                    "allocation size must be a compile-time constant or bounded parameter",
+                    expr.arguments[0].span,
+                    info.module_name,
+                )
+                return 0
+            return count * 4
+
+        if callee_name == "alloc_u32" and len(expr.arguments) >= 1:
+            count = self._evaluate_alloc_size(info, expr.arguments[0], tracked_values, bounded_params)
+            if count is None:
+                self._error(
+                    "E_UNBOUNDED_HEAP",
+                    "allocation size must be a compile-time constant or bounded parameter",
+                    expr.arguments[0].span,
+                    info.module_name,
+                )
+                return 0
+            return count * 4
+
+        if callee_name == "alloc_i64" and len(expr.arguments) >= 1:
+            count = self._evaluate_alloc_size(info, expr.arguments[0], tracked_values, bounded_params)
+            if count is None:
+                self._error(
+                    "E_UNBOUNDED_HEAP",
+                    "allocation size must be a compile-time constant or bounded parameter",
+                    expr.arguments[0].span,
+                    info.module_name,
+                )
+                return 0
+            return count * 8
+
+        return None
+
+    def _evaluate_alloc_size(
+        self,
+        info: FunctionInfo,
+        expr: Expression,
+        tracked_values: Dict[str, int],
+        bounded_params: Dict[str, int],
+    ) -> Optional[int]:
+        if isinstance(expr, LiteralExpr) and expr.kind == "int":
+            return parse_int_literal(expr.value)
+
+        if isinstance(expr, CastExpr):
+            return self._evaluate_alloc_size(info, expr.expression, tracked_values, bounded_params)
+
+        if isinstance(expr, IdentifierExpr):
+            if expr.name in bounded_params:
+                return bounded_params[expr.name]
+            if expr.name in tracked_values:
+                return tracked_values[expr.name]
+            if expr.name in info.const_eval.const_values:
+                value = info.const_eval.const_values[expr.name]
+                if isinstance(value, IntConstant):
+                    return value.value
+
+        if isinstance(expr, BinaryExpr):
+            left_value = self._evaluate_alloc_size(info, expr.left, tracked_values, bounded_params)
+            right_value = self._evaluate_alloc_size(info, expr.right, tracked_values, bounded_params)
+            if left_value is not None and right_value is not None:
+                if expr.operator == "+":
+                    return left_value + right_value
+                if expr.operator == "-":
+                    return left_value - right_value
+                if expr.operator == "*":
+                    return left_value * right_value
+                if expr.operator == "/":
+                    return left_value // right_value
+
+        return None
+
+    def _bounded_params(self, decl: FunctionDecl) -> Dict[str, int]:
+        bounded: Dict[str, int] = {}
+        for param in decl.params:
+            if param.name.endswith("_bounded"):
+                bounded[param.name] = 1000
+        return bounded
+
+    def _compute_effects(self):
+        for component_index in range(len(self.components)):
+            deterministic, isr_safe = self._component_effects(component_index)
+            component = self.components[component_index]
+            for member in component.members:
+                info = self.functions[member]
+                info.deterministic = deterministic
+                info.isr_safe = isr_safe
+
+    def _component_effects(self, component_index: int) -> Tuple[bool, bool]:
+        if component_index in self._component_effect_cache:
+            return self._component_effect_cache[component_index]
+
+        component = self.components[component_index]
+        deterministic = True
+        isr_safe = True
+
+        for member in component.members:
+            info = self.functions[member]
+            if self._has_annotation(info.decl.annotations, "nondeterministic"):
+                deterministic = False
+
+            if info.is_extern:
+                if not self._has_annotation(info.decl.annotations, "isr_safe"):
+                    isr_safe = False
+            else:
+                if info.total_heap_bytes > 0:
+                    isr_safe = False
+
+        for target in component.outgoing_components:
+            target_deterministic, target_isr_safe = self._component_effects(target)
+            deterministic = deterministic and target_deterministic
+            isr_safe = isr_safe and target_isr_safe
+
+        self._component_effect_cache[component_index] = (deterministic, isr_safe)
+        return deterministic, isr_safe
+
+    def _validate_interrupts(self):
+        for info in self.functions.values():
+            if not info.is_interrupt:
+                continue
+
+            if info.is_extern:
+                self._error(
+                    "E_INTERRUPT_EXTERN",
+                    "@interrupt functions cannot be extern",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if info.decl.visibility != "public":
+                self._error(
+                    "E_INTERRUPT_VISIBILITY",
+                    "@interrupt functions must be public so the target HAL can bind them",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if info.decl.params:
+                self._error(
+                    "E_INTERRUPT_SIGNATURE",
+                    "@interrupt functions must not take parameters",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            return_type = info.type_checker._resolve_type(info.decl.return_type)
+            if return_type and not isinstance(return_type, VoidType):
+                self._error(
+                    "E_INTERRUPT_SIGNATURE",
+                    "@interrupt functions must return void",
+                    info.decl.return_type.span,
+                    info.module_name,
+                )
+
+            if info.recursion_depth is not None:
+                self._error(
+                    "E_INTERRUPT_RECURSION",
+                    "@interrupt functions cannot be recursive",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if info.total_heap_bytes > 0:
+                self._error(
+                    "E_INTERRUPT_HEAP",
+                    "@interrupt functions cannot allocate heap memory",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if not info.deterministic:
+                self._error(
+                    "E_INTERRUPT_NONDETERMINISTIC",
+                    "@interrupt functions can only call deterministic code",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+            if not info.isr_safe:
+                self._error(
+                    "E_INTERRUPT_UNSAFE_CALL",
+                    "@interrupt functions can only call ISR-safe code",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+    def _apply_stack_budgets(self):
+        for info in self.functions.values():
+            stack_budget = self._optional_stack_annotation(info)
+            if stack_budget is not None and info.stack_bytes > stack_budget:
+                self._warning(
+                    "W_STACK_BUDGET_EXCEEDED",
+                    f"function '{info.name}' uses {info.stack_bytes}B stack, exceeds @stack({stack_budget}) budget",
+                    info.decl.span,
+                    info.module_name,
+                )
+
+    def _finalize_resources(self):
+        self.resources.clear()
+        self.total_stack_bytes = 0
+        self.total_heap_bytes = 0
+        self.deepest_stack_path = []
+
+        for qualified_name, info in self.functions.items():
+            call_path = [self._display_name(item) for item in info.call_path]
+            resource = FunctionResource(
+                frame_stack_bytes=info.frame_stack_bytes,
+                stack_bytes=info.stack_bytes,
+                heap_bytes=info.total_heap_bytes,
+                recursion_depth=info.recursion_depth,
+                deterministic=info.deterministic,
+                isr_safe=info.isr_safe,
+                is_interrupt=info.is_interrupt,
+                call_path=call_path,
+            )
+            self.resources[qualified_name] = resource
+
+            self.total_stack_bytes = max(self.total_stack_bytes, resource.stack_bytes)
+            self.total_heap_bytes += resource.heap_bytes
+            if resource.stack_bytes == self.total_stack_bytes:
+                self.deepest_stack_path = list(call_path)
+
+    def _calculate_stack_usage(self, info: FunctionInfo) -> int:
+        total = 0
+
+        for param in info.decl.params:
+            param_type = info.type_checker._resolve_type(param.type)
             if param_type:
                 total += self._sizeof(param_type)
-        
-        # Add local variable sizes
-        if func.body:
-            total += self._calculate_block_stack(func.body)
-        
+
+        if info.decl.body:
+            total += self._calculate_block_stack(info, info.decl.body)
+
         return total
-    
-    def _calculate_block_stack(self, block: Block) -> int:
-        """Calculate stack usage for a block."""
+
+    def _calculate_block_stack(self, info: FunctionInfo, block: Block) -> int:
         total = 0
-        
-        for stmt in block.statements:
-            if isinstance(stmt, LetDecl):
-                var_type = self.type_checker._resolve_type(stmt.type)
+
+        for statement in block.statements:
+            if isinstance(statement, LetDecl):
+                var_type = info.type_checker._resolve_type(statement.type)
                 if var_type:
                     total += self._sizeof(var_type)
-            
-            elif isinstance(stmt, Block):
-                total += self._calculate_block_stack(stmt)
-            
-            elif isinstance(stmt, IfStmt):
-                # Take maximum of branches
-                then_stack = self._calculate_block_stack(stmt.then_block)
-                max_branch = then_stack
-                
-                for elif_branch in stmt.elif_branches:
-                    elif_stack = self._calculate_block_stack(elif_branch.block)
-                    max_branch = max(max_branch, elif_stack)
-                
-                if stmt.else_block:
-                    else_stack = self._calculate_block_stack(stmt.else_block)
-                    max_branch = max(max_branch, else_stack)
-                
-                total += max_branch
-            
-            elif isinstance(stmt, ForStmt):
-                # Iterator variable
-                total += 4  # Assume i32
-                # Body stack
-                total += self._calculate_block_stack(stmt.body)
-            
-            elif isinstance(stmt, WhileStmt):
-                # While loop body stack
-                total += self._calculate_block_stack(stmt.body)
-        
+
+            elif isinstance(statement, Block):
+                total += self._calculate_block_stack(info, statement)
+
+            elif isinstance(statement, IfStmt):
+                branch_max = self._calculate_block_stack(info, statement.then_block)
+                for branch in statement.elif_branches:
+                    branch_max = max(branch_max, self._calculate_block_stack(info, branch.block))
+                if statement.else_block:
+                    branch_max = max(branch_max, self._calculate_block_stack(info, statement.else_block))
+                total += branch_max
+
+            elif isinstance(statement, ForStmt):
+                total += 4
+                total += self._calculate_block_stack(info, statement.body)
+
+            elif isinstance(statement, WhileStmt):
+                self._error(
+                    "E_WHILE_REMOVED",
+                    "while loops are not part of BASIS",
+                    statement.span,
+                    info.module_name,
+                )
+
         return total
-    
-    def _sizeof(self, typ: BasisType) -> int:
-        """Calculate size of a type in bytes."""
-        if isinstance(typ, IntType):
-            return typ.bits // 8
-        elif isinstance(typ, FloatType):
-            return typ.bits // 8
-        elif isinstance(typ, BoolType):
+
+    def _sizeof(self, resolved_type: BasisType) -> int:
+        if isinstance(resolved_type, IntType):
+            return resolved_type.bits // 8
+        if isinstance(resolved_type, FloatType):
+            return resolved_type.bits // 8
+        if isinstance(resolved_type, BoolType):
             return 1
-        elif isinstance(typ, PointerType):
-            return 4  # 32-bit pointers (typical embedded target)
-        elif isinstance(typ, ArrayType):
-            element_size = self._sizeof(typ.element)
-            # Use the known size from type if available, otherwise assume 1 element
-            array_count = typ.size if typ.size is not None else 1
-            return element_size * array_count
-        elif isinstance(typ, StructType):
-            # Sum of field sizes (ignoring padding for now)
-            total = 0
-            for field_type in typ.fields.values():
-                total += self._sizeof(field_type)
-            return total
-        else:
-            return 0
-    
-    # ========================================================================
-    # Heap Usage Calculation
-    # ========================================================================
-    
-    def _calculate_heap_usage(self, node) -> int:
-        """Calculate heap usage in a code block."""
-        total = 0
-        
-        if isinstance(node, Block):
-            for stmt in node.statements:
-                total += self._calculate_heap_usage(stmt)
-        
-        elif isinstance(node, ForStmt):
-            # Get loop bound
-            loop_bound = self.loop_analyzer.get_loop_bound(node)
-            if loop_bound:
-                # Save current loop context
-                prev_loop_bound = self.current_loop_bound
-                self.current_loop_bound = loop_bound.max_iterations
-                
-                body_heap = self._calculate_heap_usage(node.body)
-                total += body_heap * loop_bound.max_iterations
-                
-                self.current_loop_bound = prev_loop_bound
-            else:
-                # Unbounded loop - check for allocations
-                if self._contains_allocation(node.body):
-                    self._error("E_UNBOUNDED_HEAP",
-                               "heap allocation in loop with unbounded iteration count",
-                               node.span)
-        
-        elif isinstance(node, WhileStmt):
-            # Use max_iterations from @bounded annotation if available
-            if node.max_iterations is not None:
-                prev_loop_bound = self.current_loop_bound
-                self.current_loop_bound = node.max_iterations
-                
-                body_heap = self._calculate_heap_usage(node.body)
-                total += body_heap * node.max_iterations
-                
-                self.current_loop_bound = prev_loop_bound
-            else:
-                if self._contains_allocation(node.body):
-                    self._error("E_UNBOUNDED_HEAP",
-                               "heap allocation in while loop without @bounded annotation",
-                               node.span)
-        
-        elif isinstance(node, IfStmt):
-            # Take maximum of branches
-            then_heap = self._calculate_heap_usage(node.then_block)
-            max_branch = then_heap
-            
-            for elif_branch in node.elif_branches:
-                elif_heap = self._calculate_heap_usage(elif_branch.block)
-                max_branch = max(max_branch, elif_heap)
-            
-            if node.else_block:
-                else_heap = self._calculate_heap_usage(node.else_block)
-                max_branch = max(max_branch, else_heap)
-            
-            total += max_branch
-        
-        elif isinstance(node, ExprStmt):
-            total += self._calculate_expr_heap(node.expression)
-        
-        elif isinstance(node, LetDecl):
-            if node.initializer:
-                total += self._calculate_expr_heap(node.initializer)
-                # Track variable value if it's a constant integer
-                init_val = self._evaluate_alloc_size(node.initializer)
-                if init_val is not None:
-                    self.tracked_local_values[node.name] = init_val
-        
-        elif isinstance(node, ReturnStmt):
-            if node.value:
-                total += self._calculate_expr_heap(node.value)
-        
-        return total
-    
-    def _calculate_expr_heap(self, expr: Expression) -> int:
-        """Calculate heap usage in an expression."""
-        total = 0
-        
-        if isinstance(expr, CallExpr):
-            # Check if it's an alloc call
-            if isinstance(expr.callee, IdentifierExpr):
-                callee_name = expr.callee.name
-                
-                # Recognize allocation functions
-                if callee_name == "alloc" and len(expr.arguments) >= 2:
-                    # alloc(type, size)
-                    size_arg = expr.arguments[1]
-                    alloc_size = self._evaluate_alloc_size(size_arg)
-                    
-                    if alloc_size is not None:
-                        total += alloc_size
-                    else:
-                        self._error("E_UNBOUNDED_HEAP",
-                                   "allocation size must be a compile-time constant or bounded parameter",
-                                   size_arg.span)
-                
-                elif callee_name in ("alloc_bytes", "alloc_u8", "malloc") and len(expr.arguments) >= 1:
-                    # alloc_bytes(size), alloc_u8(count), malloc(size) - 1 byte per element
-                    size_arg = expr.arguments[0]
-                    alloc_size = self._evaluate_alloc_size(size_arg)
-                    
-                    if alloc_size is not None:
-                        total += alloc_size
-                    else:
-                        self._error("E_UNBOUNDED_HEAP",
-                                   "allocation size must be a compile-time constant or bounded parameter",
-                                   size_arg.span)
-                
-                elif callee_name == "alloc_i32" and len(expr.arguments) >= 1:
-                    # alloc_i32(count) - 4 bytes per element
-                    count_arg = expr.arguments[0]
-                    alloc_count = self._evaluate_alloc_size(count_arg)
-                    
-                    if alloc_count is not None:
-                        total += alloc_count * 4  # 4 bytes per i32
-                    else:
-                        self._error("E_UNBOUNDED_HEAP",
-                                   "allocation size must be a compile-time constant or bounded parameter",
-                                   count_arg.span)
-                
-                elif callee_name == "alloc_u32" and len(expr.arguments) >= 1:
-                    count_arg = expr.arguments[0]
-                    alloc_count = self._evaluate_alloc_size(count_arg)
-                    if alloc_count is not None:
-                        total += alloc_count * 4
-                    else:
-                        self._error("E_UNBOUNDED_HEAP",
-                                   "allocation size must be a compile-time constant or bounded parameter",
-                                   count_arg.span)
-                
-                elif callee_name == "alloc_i64" and len(expr.arguments) >= 1:
-                    count_arg = expr.arguments[0]
-                    alloc_count = self._evaluate_alloc_size(count_arg)
-                    if alloc_count is not None:
-                        total += alloc_count * 8
-                    else:
-                        self._error("E_UNBOUNDED_HEAP",
-                                   "allocation size must be a compile-time constant or bounded parameter",
-                                   count_arg.span)
-                
-                elif callee_name == "alloc_zeroed" and len(expr.arguments) >= 1:
-                    size_arg = expr.arguments[0]
-                    alloc_size = self._evaluate_alloc_size(size_arg)
-                    if alloc_size is not None:
-                        total += alloc_size
-                    else:
-                        self._error("E_UNBOUNDED_HEAP",
-                                   "allocation size must be a compile-time constant or bounded parameter",
-                                   size_arg.span)
-                
-                elif callee_name in self.resources:
-                    # Regular function call - add callee's heap usage
-                    total += self.resources[callee_name].heap_bytes
-        
-        elif isinstance(expr, BinaryExpr):
-            total += self._calculate_expr_heap(expr.left)
-            total += self._calculate_expr_heap(expr.right)
-        
-        elif isinstance(expr, UnaryExpr):
-            total += self._calculate_expr_heap(expr.operand)
-        
-        elif isinstance(expr, AssignmentExpr):
-            total += self._calculate_expr_heap(expr.target)
-            total += self._calculate_expr_heap(expr.value)
-        
-        return total
-    
-    def _evaluate_alloc_size(self, expr: Expression) -> Optional[int]:
-        """Evaluate allocation size expression."""
-        # Direct literal - always works
-        if isinstance(expr, LiteralExpr) and expr.kind == 'int':
-            return parse_int_literal(expr.value)
-        
-        # Cast expression - extract inner value
-        if isinstance(expr, CastExpr):
-            return self._evaluate_alloc_size(expr.expression)
-        
-        # Check if it's a bounded parameter or tracked local
-        if isinstance(expr, IdentifierExpr):
-            if expr.name in self.bounded_params:
-                return self.bounded_params[expr.name]
-            # Check if we tracked this variable's value
-            if expr.name in self.tracked_local_values:
-                return self.tracked_local_values[expr.name]
-            # Try const evaluation only for identifiers (const decls)
-            if expr.name in self.const_eval.const_values:
-                val = self.const_eval.const_values[expr.name]
-                if isinstance(val, IntConstant):
-                    return val.value
-        
-        # Binary expression - try to evaluate
-        if isinstance(expr, BinaryExpr):
-            left_val = self._evaluate_alloc_size(expr.left)
-            right_val = self._evaluate_alloc_size(expr.right)
-            if left_val is not None and right_val is not None:
-                if expr.operator == '+':
-                    return left_val + right_val
-                elif expr.operator == '-':
-                    return left_val - right_val
-                elif expr.operator == '*':
-                    return left_val * right_val
-                elif expr.operator == '/':
-                    return left_val // right_val
-        
+        if isinstance(resolved_type, ResolvedPointerType):
+            return 4
+        if isinstance(resolved_type, ResolvedArrayType):
+            element_size = self._sizeof(resolved_type.element)
+            element_count = resolved_type.size if resolved_type.size is not None else 1
+            return element_size * element_count
+        if isinstance(resolved_type, StructType):
+            return sum(self._sizeof(field_type) for field_type in resolved_type.fields.values())
+        return 0
+
+    def _required_stack_annotation(self, info: FunctionInfo) -> Optional[int]:
+        stack_value = self._optional_stack_annotation(info)
+        if stack_value is None:
+            self._error(
+                "E_EXTERN_STACK_REQUIRED",
+                f"extern function '{info.name}' requires @stack(N)",
+                info.decl.span,
+                info.module_name,
+            )
+        return stack_value
+
+    def _optional_stack_annotation(self, info: FunctionInfo) -> Optional[int]:
+        annotation = self._find_annotation(info.decl.annotations, "stack")
+        if annotation is None:
+            return None
+        return self._annotation_int_value(info, annotation, ("value",))
+
+    def _recursion_annotation(self, info: FunctionInfo) -> Optional[int]:
+        annotation = self._find_annotation(info.decl.annotations, "recursion")
+        if annotation is None:
+            return None
+        return self._annotation_int_value(info, annotation, ("max", "value"))
+
+    def _annotation_int_value(
+        self,
+        info: FunctionInfo,
+        annotation: Annotation,
+        keys: Tuple[str, ...],
+    ) -> Optional[int]:
+        argument = None
+        for key in keys:
+            if annotation.arguments and key in annotation.arguments:
+                argument = annotation.arguments[key]
+                break
+
+        if argument is None:
+            self._error(
+                "E_INVALID_ANNOTATION",
+                f"@{annotation.name} requires an integer argument",
+                annotation.span,
+                info.module_name,
+            )
+            return None
+
+        try:
+            value = info.const_eval.eval_constant(argument)
+        except Exception:
+            value = None
+
+        if not isinstance(value, IntConstant):
+            self._error(
+                "E_INVALID_ANNOTATION",
+                f"@{annotation.name} requires a compile-time integer constant",
+                annotation.span,
+                info.module_name,
+            )
+            return None
+
+        if value.value <= 0:
+            self._error(
+                "E_INVALID_ANNOTATION",
+                f"@{annotation.name} value must be positive",
+                annotation.span,
+                info.module_name,
+            )
+            return None
+
+        return value.value
+
+    def _find_annotation(self, annotations: List[Annotation], name: str) -> Optional[Annotation]:
+        for annotation in annotations:
+            if annotation.name == name:
+                return annotation
         return None
-    
-    def _contains_allocation(self, node) -> bool:
-        """Check if a node contains any heap allocation."""
-        if isinstance(node, Block):
-            for stmt in node.statements:
-                if self._contains_allocation(stmt):
-                    return True
-        
-        elif isinstance(node, ExprStmt):
-            return self._expr_contains_allocation(node.expression)
-        
-        elif isinstance(node, LetDecl):
-            if node.initializer:
-                return self._expr_contains_allocation(node.initializer)
-        
-        elif isinstance(node, ReturnStmt):
-            if node.value:
-                return self._expr_contains_allocation(node.value)
-        
-        elif isinstance(node, IfStmt):
-            if self._contains_allocation(node.then_block):
-                return True
-            for elif_branch in node.elif_branches:
-                if self._contains_allocation(elif_branch.block):
-                    return True
-            if node.else_block and self._contains_allocation(node.else_block):
-                return True
-        
-        elif isinstance(node, ForStmt):
-            return self._contains_allocation(node.body)
-        
-        elif isinstance(node, WhileStmt):
-            return self._contains_allocation(node.body)
-        
-        return False
-    
-    _ALLOC_FUNCTIONS = {"alloc", "alloc_bytes", "alloc_u8", "alloc_i32",
-                         "alloc_u32", "alloc_i64", "alloc_zeroed", "malloc"}
 
-    def _expr_contains_allocation(self, expr: Expression) -> bool:
-        """Check if expression contains allocation."""
-        if isinstance(expr, CallExpr):
-            if isinstance(expr.callee, IdentifierExpr) and expr.callee.name in self._ALLOC_FUNCTIONS:
-                return True
-        
-        elif isinstance(expr, BinaryExpr):
-            return self._expr_contains_allocation(expr.left) or self._expr_contains_allocation(expr.right)
-        
-        elif isinstance(expr, UnaryExpr):
-            return self._expr_contains_allocation(expr.operand)
-        
-        elif isinstance(expr, AssignmentExpr):
-            return self._expr_contains_allocation(expr.target) or self._expr_contains_allocation(expr.value)
-        
-        return False
-    
-    # ========================================================================
-    # Query Interface
-    # ========================================================================
-    
-    def get_resource(self, func_name: str) -> Optional[FunctionResource]:
-        """Get resource metadata for a function."""
-        return self.resources.get(func_name)
-    
-    def get_all_resources(self) -> Dict[str, FunctionResource]:
-        """Get all function resources."""
-        return self.resources.copy()
-    
-    # ========================================================================
-    # Error Reporting
-    # ========================================================================
-    
-    def _error(self, code: str, message: str, span: SourceSpan):
-        """Report an error."""
-        self.diag.error(code, message, span.start_line, span.start_col,
-                       filename=f"<{self.current_module_name}>")
-    
-    def _warning(self, code: str, message: str, span: SourceSpan):
-        """Report a warning."""
-        self.diag.report('warning', code, message, span.start_line, span.start_col,
-                        filename=f"<{self.current_module_name}>")
+    def _has_annotation(self, annotations: List[Annotation], name: str) -> bool:
+        return self._find_annotation(annotations, name) is not None
+
+    def _qualified_name(self, module_name: str, function_name: str) -> str:
+        return f"{module_name}::{function_name}"
+
+    def _display_name(self, item: str) -> str:
+        return item
+
+    def _error(self, code: str, message: str, span: SourceSpan, module_name: str):
+        self.diag.error(
+            code,
+            message,
+            span.start_line,
+            span.start_col,
+            filename=f"<{module_name}>",
+        )
+
+    def _warning(self, code: str, message: str, span: SourceSpan, module_name: str):
+        self.diag.warning(
+            code,
+            message,
+            span.start_line,
+            span.start_col,
+            filename=f"<{module_name}>",
+        )
 
 
-# ============================================================================
-# Convenience Functions
-# ============================================================================
-
-def analyze_resources(module: Module, diag: DiagnosticEngine,
-                     type_checker: TypeChecker,
-                     const_eval: ConstantEvaluator,
-                     loop_analyzer: LoopAnalyzer,
-                     module_scope: Scope) -> ResourceAnalyzer:
-    """
-    Convenience function to analyze resources in a module.
-    Returns the analyzer for querying resource usage.
-    """
-    analyzer = ResourceAnalyzer(diag, type_checker, const_eval, loop_analyzer, module_scope)
-    analyzer.analyze(module)
+def analyze_program_resources(
+    modules: Dict[str, Module],
+    diag: DiagnosticEngine,
+    module_scopes: Dict[str, Scope],
+    type_checkers: Dict[str, TypeChecker],
+    const_evaluators: Dict[str, ConstantEvaluator],
+    loop_analyzers: Dict[str, LoopAnalyzer],
+) -> ProgramResourceAnalyzer:
+    analyzer = ProgramResourceAnalyzer(
+        diag,
+        modules,
+        module_scopes,
+        type_checkers,
+        const_evaluators,
+        loop_analyzers,
+    )
+    analyzer.analyze()
     return analyzer

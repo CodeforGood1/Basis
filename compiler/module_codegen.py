@@ -106,6 +106,9 @@ class ModuleCodeGenerator:
         lines.append("")
         lines.append("#include <stdint.h>")
         lines.append("#include <stdbool.h>")
+        lines.append("#ifndef BASIS_INTERRUPT")
+        lines.append("#define BASIS_INTERRUPT")
+        lines.append("#endif")
         lines.append("")
         
         # Extract public declarations only
@@ -153,6 +156,9 @@ class ModuleCodeGenerator:
         lines.append("#include <stdlib.h>")
         lines.append("#include <stdio.h>")
         lines.append("#include <string.h>")
+        lines.append("#ifndef BASIS_INTERRUPT")
+        lines.append("#define BASIS_INTERRUPT")
+        lines.append("#endif")
         lines.append("")
         
         # Scan AST and emit only the runtime helpers this module actually uses
@@ -259,19 +265,21 @@ class ModuleCodeGenerator:
         gen = CCodeGenerator()
         return_type = gen._emit_type(decl.return_type)
         params = gen._emit_params(decl.params)
-        return f"{return_type} {decl.name}({params});"
+        prefix = "BASIS_INTERRUPT " if gen._has_annotation(decl.annotations, 'interrupt') else ""
+        return f"{prefix}{return_type} {decl.name}({params});"
     
     def _emit_function_impl(self, gen: CCodeGenerator, decl: FunctionDecl):
         """Emit function implementation using existing generator."""
         return_type = gen._emit_type(decl.return_type)
         params = gen._emit_params(decl.params)
+        interrupt_prefix = "BASIS_INTERRUPT " if gen._has_annotation(decl.annotations, 'interrupt') else ""
         
         # Add static for private functions (but never for main or in export_all mode)
         is_private = decl.visibility != 'public' and not self.export_all
         if is_private and decl.name != 'main':
-            gen._emit_line(f"static {return_type} {decl.name}({params}) {{")
+            gen._emit_line(f"static {interrupt_prefix}{return_type} {decl.name}({params}) {{")
         else:
-            gen._emit_line(f"{return_type} {decl.name}({params}) {{")
+            gen._emit_line(f"{interrupt_prefix}{return_type} {decl.name}({params}) {{")
         
         gen.indent_level += 1
         

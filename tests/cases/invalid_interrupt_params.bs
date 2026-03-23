@@ -1,0 +1,6 @@
+#[max_memory(4kb)]
+
+@interrupt
+public fn bad_irq(value: u32) -> void {
+    return;
+}

@@ -5,13 +5,13 @@
 // Extern Bindings (C standard library)
 // ============================================================================
 
-extern fn strlen(s: *u8) -> i32;
-extern fn strcmp(s1: *u8, s2: *u8) -> i32;
-extern fn strncmp(s1: *u8, s2: *u8, n: i32) -> i32;
-extern fn strcpy(dest: *u8, src: *u8) -> *u8;
-extern fn strncpy(dest: *u8, src: *u8, n: i32) -> *u8;
-extern fn strcat(dest: *u8, src: *u8) -> *u8;
-extern fn strchr(s: *u8, c: i32) -> *u8;
+@stack(64) extern fn strlen(s: *u8) -> i32;
+@stack(64) extern fn strcmp(s1: *u8, s2: *u8) -> i32;
+@stack(64) extern fn strncmp(s1: *u8, s2: *u8, n: i32) -> i32;
+@stack(64) extern fn strcpy(dest: *u8, src: *u8) -> *u8;
+@stack(64) extern fn strncpy(dest: *u8, src: *u8, n: i32) -> *u8;
+@stack(64) extern fn strcat(dest: *u8, src: *u8) -> *u8;
+@stack(64) extern fn strchr(s: *u8, c: i32) -> *u8;
 
 // ============================================================================
 // String Length

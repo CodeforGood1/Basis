@@ -1,0 +1,7 @@
+#[max_memory(4kb)]
+
+extern fn platform_tick() -> u32;
+
+fn main() -> i32 {
+    return 0;
+}

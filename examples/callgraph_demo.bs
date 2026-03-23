@@ -1,0 +1,24 @@
+#[max_memory(8kb)]
+
+fn leaf(value: i32) -> i32 {
+    let scratch: [i32; 4] = [1, 2, 3, 4];
+    return value + scratch[3];
+}
+
+fn stage_two(value: i32) -> i32 {
+    let local: i32 = value * (2 as i32);
+    return leaf(local);
+}
+
+fn stage_one(value: i32) -> i32 {
+    let adjusted: i32 = value + (5 as i32);
+    return stage_two(adjusted);
+}
+
+fn main() -> i32 {
+    let result: i32 = stage_one(7 as i32);
+    if result == 28 as i32 {
+        return 0;
+    }
+    return 1;
+}

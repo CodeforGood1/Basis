@@ -5,39 +5,40 @@
 // Extern Bindings - Output
 // ============================================================================
 
+@stack(64)
 extern fn puts(s: *u8) -> i32;
 
 // Print externs (non-variadic wrappers provided by compiler)
-extern fn print_str(s: *u8) -> void;
-extern fn print_i8(x: i8) -> void;
-extern fn print_i16(x: i16) -> void;
-extern fn print_i32(x: i32) -> void;
-extern fn print_i64(x: i64) -> void;
-extern fn print_u8(x: u8) -> void;
-extern fn print_u16(x: u16) -> void;
-extern fn print_u32(x: u32) -> void;
-extern fn print_u64(x: u64) -> void;
-extern fn print_f32(x: f32) -> void;
-extern fn print_f64(x: f64) -> void;
-extern fn print_bool(x: bool) -> void;
-extern fn print_char(c: u8) -> void;
-extern fn print_ptr(p: *u8) -> void;
-extern fn print_int(x: i32) -> void;
-extern fn print_uint(x: u32) -> void;
+@stack(64) extern fn print_str(s: *u8) -> void;
+@stack(64) extern fn print_i8(x: i8) -> void;
+@stack(64) extern fn print_i16(x: i16) -> void;
+@stack(64) extern fn print_i32(x: i32) -> void;
+@stack(64) extern fn print_i64(x: i64) -> void;
+@stack(64) extern fn print_u8(x: u8) -> void;
+@stack(64) extern fn print_u16(x: u16) -> void;
+@stack(64) extern fn print_u32(x: u32) -> void;
+@stack(64) extern fn print_u64(x: u64) -> void;
+@stack(64) extern fn print_f32(x: f32) -> void;
+@stack(64) extern fn print_f64(x: f64) -> void;
+@stack(64) extern fn print_bool(x: bool) -> void;
+@stack(64) extern fn print_char(c: u8) -> void;
+@stack(64) extern fn print_ptr(p: *u8) -> void;
+@stack(64) extern fn print_int(x: i32) -> void;
+@stack(64) extern fn print_uint(x: u32) -> void;
 
 // ============================================================================
 // Extern Bindings - Input
 // ============================================================================
 
 // Input externs (non-variadic wrappers provided by compiler)
-extern fn read_i32() -> i32;
-extern fn read_i64() -> i64;
-extern fn read_u32() -> u32;
-extern fn read_u64() -> u64;
-extern fn read_f32() -> f32;
-extern fn read_f64() -> f64;
-extern fn read_char() -> u8;
-extern fn read_line(buf: *u8, max_len: i32) -> void;
+@stack(64) extern fn read_i32() -> i32;
+@stack(64) extern fn read_i64() -> i64;
+@stack(64) extern fn read_u32() -> u32;
+@stack(64) extern fn read_u64() -> u64;
+@stack(64) extern fn read_f32() -> f32;
+@stack(64) extern fn read_f64() -> f64;
+@stack(64) extern fn read_char() -> u8;
+@stack(64) extern fn read_line(buf: *u8, max_len: i32) -> void;
 
 // ============================================================================
 // String Output

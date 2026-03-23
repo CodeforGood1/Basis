@@ -18,7 +18,7 @@ from sema import SemanticAnalyzer, ModuleRegistry
 from typecheck import TypeChecker, check_types
 from consteval import evaluate_constants
 from loop_analysis import analyze_loops
-from resource_analysis import analyze_resources
+from resource_analysis import analyze_program_resources
 from module_codegen import ModuleCodeGenerator
 from ast_defs import Module, FunctionDecl, ImportDecl
 from target_config import TargetConfig, PREDEFINED_TARGETS
@@ -374,35 +374,52 @@ def compile_basis(input_files: List[str],
     # STAGE 7: Resource Analysis
     # ========================================================================
     
-    resource_analyzers = {}
+    program_resources = analyze_program_resources(
+        modules,
+        diag,
+        module_scopes,
+        type_checkers,
+        const_evaluators,
+        loop_analyzers,
+    )
     
-    for module_name, module in modules.items():
-        scope = module_scopes[module_name]
-        type_checker = type_checkers[module_name]
-        const_eval = const_evaluators[module_name]
-        loop_analyzer = loop_analyzers[module_name]
-        
-        res_analyzer = analyze_resources(module, diag, type_checker, 
-                                         const_eval, loop_analyzer, scope)
-        
-        if diag.has_errors():
-            diag.print_all()
-            return 1
-        
-        resource_analyzers[module_name] = res_analyzer
+    if diag.has_errors():
+        diag.print_all()
+        return 1
     
     # ========================================================================
     # Display Resource Usage (ALWAYS)
     # ========================================================================
     
     # Calculate total resource usage
+    entry_function_names = []
+    for module_name, module in modules.items():
+        for decl in module.declarations:
+            if not isinstance(decl, FunctionDecl):
+                continue
+            is_interrupt = any(annotation.name == "interrupt" for annotation in decl.annotations)
+            if is_interrupt:
+                entry_function_names.append(f"{module_name}::{decl.name}")
+            elif not is_library and decl.name == "main":
+                entry_function_names.append(f"{module_name}::{decl.name}")
+            elif is_library and decl.visibility == "public":
+                entry_function_names.append(f"{module_name}::{decl.name}")
+
+    if not entry_function_names:
+        entry_function_names = list(program_resources.get_all_resources().keys())
+
     total_stack = 0
     total_heap = 0
-    
-    for module_name, res_analyzer in resource_analyzers.items():
-        for func_name, resource in res_analyzer.get_all_resources().items():
-            total_stack = max(total_stack, resource.stack_bytes)
-            total_heap += resource.heap_bytes
+    deepest_path = []
+    all_resources = program_resources.get_all_resources()
+    for qualified_name in entry_function_names:
+        resource = all_resources.get(qualified_name)
+        if not resource:
+            continue
+        if resource.stack_bytes > total_stack:
+            total_stack = resource.stack_bytes
+            deepest_path = list(resource.call_path)
+        total_heap += resource.heap_bytes
     
     # Estimate code size (rough estimate: 100 bytes per function)
     total_functions = sum(
@@ -418,21 +435,28 @@ def compile_basis(input_files: List[str],
     
     if show_resources:
         # Detailed per-function view
-        for module_name, res_analyzer in resource_analyzers.items():
+        for module_name in modules.keys():
             print(f"\nModule: {module_name}")
             print("-" * 70)
             
-            all_resources = res_analyzer.get_all_resources()
+            all_resources = program_resources.get_module_resources(module_name)
             if not all_resources:
                 print("  (no functions)")
                 continue
             
             for func_name, resource in all_resources.items():
                 print(f"\n  Function: {func_name}()")
+                print(f"    Frame:     {resource.frame_stack_bytes:6d} bytes")
                 print(f"    Stack:     {resource.stack_bytes:6d} bytes")
                 print(f"    Heap:      {resource.heap_bytes:6d} bytes")
                 if resource.recursion_depth is not None:
                     print(f"    Recursion: depth {resource.recursion_depth}")
+                print(f"    Deterministic: {'yes' if resource.deterministic else 'no'}")
+                print(f"    ISR-safe:      {'yes' if resource.isr_safe else 'no'}")
+                if resource.is_interrupt:
+                    print(f"    Interrupt:     yes")
+                if resource.call_path:
+                    print(f"    Deepest path:  {' -> '.join(resource.call_path)}")
     
     # Always show totals
     print(f"\nProgram Size Summary:")
@@ -441,6 +465,11 @@ def compile_basis(input_files: List[str],
     print(f"  Code (~):      {estimated_code_size:8d} bytes")
     print(f"  -------------------------------")
     print(f"  TOTAL:         {total_program_size:8d} bytes ({total_program_size / 1024:.2f} KB)")
+    if deepest_path:
+        print(f"  Deepest path:  {' -> '.join(deepest_path)}")
+    recursive_cycles = program_resources.get_recursive_cycles()
+    if recursive_cycles:
+        print(f"  Call cycles:   {len(recursive_cycles)}")
     print("="*70)
     
     # ========================================================================

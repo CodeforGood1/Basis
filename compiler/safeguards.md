@@ -163,32 +163,23 @@ All loops must have provable termination:
 for i in 0..100 {
     process(i);
 }
+```
 
-// OK: While with clear termination
-let mut count: i32 = 10;
+### While Loops Are Rejected
+
+```basis
+// ERROR: BASIS no longer accepts while loops
 while count > 0 {
     count = count - 1;
 }
 ```
 
-### Unbounded Loop Detection
-
-```basis
-// ERROR: Cannot prove termination
-while true {
-    // infinite loop
-}
-
-// ERROR: Loop bound not determinable
-for i in 0..runtime_value {
-    // Unknown iteration count
-}
-```
-
 **Error:**
 ```
-error: loop has no determinable upper bound [E_UNBOUNDED_LOOP]
+error: while loops are not part of BASIS [E_WHILE_REMOVED]
 ```
+
+Use a bounded `for` loop or recursion with `@recursion(max=N)` instead.
 
 ---
 

@@ -65,6 +65,9 @@ class CCodeGenerator:
         self._emit_line("#include <stdbool.h>")
         self._emit_line("#include <stdio.h>")
         self._emit_line("#include <string.h>")
+        self._emit_line("#ifndef BASIS_INTERRUPT")
+        self._emit_line("#define BASIS_INTERRUPT")
+        self._emit_line("#endif")
         self._emit_line("")
         
         # Scan AST for referenced runtime helpers and emit only those used
@@ -240,6 +243,8 @@ class CCodeGenerator:
         prefix = ""
         if self._has_annotation(decl.annotations, 'inline'):
             prefix = "static inline "
+        if self._has_annotation(decl.annotations, 'interrupt'):
+            prefix += "BASIS_INTERRUPT "
         
         self._emit_line(f"{prefix}{return_type} {decl.name}({params});")
     
@@ -251,6 +256,8 @@ class CCodeGenerator:
         prefix = ""
         if self._has_annotation(decl.annotations, 'inline'):
             prefix = "static inline "
+        if self._has_annotation(decl.annotations, 'interrupt'):
+            prefix += "BASIS_INTERRUPT "
         
         self._emit_line(f"{prefix}{return_type} {decl.name}({params}) {{")
         self.indent_level += 1

@@ -2,10 +2,10 @@
 // Explicit heap allocation utilities
 
 // Extern bindings
-extern fn malloc(size: u32) -> *u8;
-extern fn free(ptr: *u8) -> void;
-extern fn memset(ptr: *u8, value: i32, size: u32) -> *u8;
-extern fn memcpy(dest: *u8, src: *u8, size: u32) -> *u8;
+@stack(64) extern fn malloc(size: u32) -> *u8;
+@stack(64) extern fn free(ptr: *u8) -> void;
+@stack(64) extern fn memset(ptr: *u8, value: i32, size: u32) -> *u8;
+@stack(64) extern fn memcpy(dest: *u8, src: *u8, size: u32) -> *u8;
 
 // Allocate raw bytes
 public fn alloc_bytes(size: u32) -> *u8 {

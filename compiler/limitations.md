@@ -20,6 +20,7 @@ These limitations exist to guarantee determinism and resource safety:
 |---------|--------|--------|
 | Unbounded recursion | Not supported | Stack overflow risk |
 | Unbounded loops | Not supported | Cannot prove termination |
+| `while` loops | Not supported | Deterministic control flow is enforced structurally |
 | Dynamic arrays | Not supported | Unbounded memory growth |
 | Variadic functions | Not supported | Unknown argument count |
 
@@ -57,11 +58,10 @@ These may be addressed in future versions:
 - **No slice types** — Use pointer + length manually
 
 ### Modules
-- **No circular imports** — Module dependencies must be acyclic
-- **No conditional compilation** — No `#ifdef` equivalent
-- **No macros** — No compile-time code generation
-- **No `mut` keyword** — All variables are mutable by default
-- **No `@annotation` syntax** — Annotations not yet implemented
+- **No circular imports** - Module dependencies must be acyclic
+- **No conditional compilation** - No `#ifdef` equivalent
+- **No macros** - No compile-time code generation
+- **No `mut` keyword** - All variables are mutable by default
 
 ### Arrays
 - **Fixed size only** — Size must be compile-time constant
@@ -157,8 +157,10 @@ When you hit a limitation, the compiler provides specific errors:
 | Error Code | Meaning |
 |------------|---------|
 | `E_UNBOUNDED_LOOP` | Loop without determinable bound |
+| `E_WHILE_REMOVED` | `while` loops are rejected |
 | `E_MISSING_RECURSION_ANNOTATION` | Recursive function needs `@recursion(max=N)` |
 | `E_UNBOUNDED_HEAP` | Allocation size not compile-time constant |
+| `E_EXTERN_STACK_REQUIRED` | `extern fn` must declare `@stack(N)` |
 | `E_INDEX_OUT_OF_BOUNDS` | Array access exceeds declared size |
 | `E_EXTERN_VARIADIC` | Variadic extern functions not supported |
 | `E_TYPE_MISMATCH` | Explicit type annotation required |

@@ -159,6 +159,7 @@ public fn bool_or(a: bool, b: bool) -> bool {
 // Assertions
 // ============================================================================
 
+@stack(32)
 extern fn exit(code: i32) -> void;
 
 public fn assert(cond: bool) -> void {

@@ -189,28 +189,11 @@ class LoopAnalyzer:
         self.loop_nesting_level = prev_nesting
     
     def _analyze_while_loop(self, stmt: WhileStmt):
-        """
-        Analyze a while loop. While loops must have a @bounded(max=N) annotation
-        to be provably bounded for embedded safety.
-        """
-        prev_nesting = self.loop_nesting_level
-        self.loop_nesting_level += 1
-        
-        if stmt.max_iterations is not None:
-            # Bounded while loop via @bounded annotation
-            bound = LoopBound(max_iterations=stmt.max_iterations, is_constant=True)
-            self.loop_bounds[id(stmt)] = bound
-        else:
-            # Unbounded while loop — warn but allow (needed for event loops, etc.)
-            self._warning("W_UNBOUNDED_WHILE",
-                         "while loop has no @bounded(max=N) annotation; "
-                         "cannot statically verify termination",
-                         stmt.span)
-        
-        # Analyze nested loops in the body
-        self._analyze_block(stmt.body)
-        
-        self.loop_nesting_level = prev_nesting
+        self._error(
+            "E_WHILE_REMOVED",
+            "while loops are not part of BASIS; use a bounded for loop or recursion with @recursion(max=N)",
+            stmt.span,
+        )
     
     def _evaluate_bound_expr(self, expr: Expression) -> Optional[tuple]:
         """

@@ -29,7 +29,7 @@ python basis.py build hello.bs --run
 ```
 
 ### Library Mode (for linking with C)
-BASIS cannot express infinite loops, so embedded apps typically use C for scheduling:
+BASIS removes `while` loops entirely, so embedded apps typically use C or a HAL for scheduling:
 ```bash
 python basis.py build --lib sensor.bs motor.bs --emit-c
 # Link generated C files with your C main loop
@@ -75,6 +75,7 @@ Program Size Summary:
   Code (~):           700 bytes
   -------------------------------
   TOTAL:             1232 bytes (1.20 KB)
+  Deepest path:  main -> filter -> accumulate
 ======================================================================
 
 Memory Budget: 1232/262144 bytes (0.5% used)
@@ -82,10 +83,13 @@ Memory Budget: 1232/262144 bytes (0.5% used)
 ```
 
 ### 3. Static Safety Checks
-- **Array bounds** — Checked at compile time
-- **Recursion depth** — Must be annotated with `@recursion(max=N)`
-- **Loop termination** — All loops must have bounded iteration
-- **Heap allocation** — Sizes must be compile-time constants
+- **Array bounds** - Checked at compile time
+- **Recursion depth** - Must be annotated with `@recursion(max=N)`
+- **Call-graph stack** - Deepest reachable stack is computed across function calls
+- **Loop termination** - `while` loops are rejected; only bounded `for` loops remain
+- **Heap allocation** - Sizes must be compile-time constants
+- **Extern contracts** - `extern fn` declarations must provide `@stack(N)`
+- **ISR validation** - `@interrupt` handlers must be deterministic, heap-free, and ISR-safe
 
 ### 4. Standard Library
 ```
@@ -119,8 +123,11 @@ python basis.py build main.bs --show-resources
 |-------|---------|
 | `E_INDEX_OUT_OF_BOUNDS` | Array access exceeds declared size |
 | `E_UNBOUNDED_LOOP` | Loop without determinable bound |
+| `E_WHILE_REMOVED` | `while` loops are not part of BASIS |
 | `E_MISSING_RECURSION_ANNOTATION` | Recursive function needs `@recursion(max=N)` |
 | `E_UNBOUNDED_HEAP` | Allocation size not compile-time constant |
+| `E_EXTERN_STACK_REQUIRED` | `extern fn` is missing `@stack(N)` |
+| `E_INTERRUPT_SIGNATURE` | `@interrupt` handler has invalid signature |
 | `E_MISSING_RETURN` | Function must return value on all paths |
 | `E_INVALID_RETURN_TYPE` | Cannot return arrays by value |
 | `missing #[max_memory]` | File lacks memory directive |
@@ -154,7 +161,7 @@ fn main() -> i32 {
 ### Array Processing
 ```basis
 fn sum(arr: [i32; 5]) -> i32 {
-    let mut total: i32 = 0;
+    let total: i32 = 0;
     for i in 0..5 {
         total = total + arr[i];
     }
@@ -197,14 +204,15 @@ v1.0/
 
 ### Extern Declaration Syntax
 ```
-extern fn IDENTIFIER(param_list?) -> type;
-extern fn IDENTIFIER(param_list?) -> type = "symbol_name";
+@stack(N) extern fn IDENTIFIER(param_list?) -> type;
+@stack(N) extern fn IDENTIFIER(param_list?) -> type = "symbol_name";
 param_list ::= param ("," param)*
 param ::= IDENTIFIER ":" type
 ```
 - Allowed types: i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, bool, void return; raw pointers to any allowed type; pointers to structs; structs by value only if trivially C-compatible. 
 - Forbidden in extern signatures: arrays, slices, function pointers, opaque handles, managed/high-level types. 
 - Variadic functions: forbidden.
+- `@stack(N)` is required on every extern so the whole-program call graph stays bounded.
 
 ### Name Binding Rules
 - Default symbol name = BASIS identifier, case-sensitive, no mangling.
