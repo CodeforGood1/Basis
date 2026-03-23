@@ -1,41 +1,13 @@
-# BASIS v1.0 — Compiler Documentation
+# BASIS
 
-> **BASIS**: A deterministic and resource safe systems language for embedded development.
+> **BASIS** is a deterministic, resource-aware systems programming language for embedded development.
 
-## Documentation Index
+BASIS is built for the kind of embedded software that becomes difficult to trust as projects grow: hidden heap growth, stack surprises, unsafe interrupt behavior, and foreign-function calls whose runtime behavior is unclear. Instead of treating those as late debugging problems, BASIS tries to push more of them into compile-time analysis.
 
-| Document | Description |
-|----------|-------------|
-| [compiler/syntax.md](compiler/syntax.md) | Complete language syntax reference |
-| [compiler/safeguards.md](compiler/safeguards.md) | Safety guarantees and compile-time checks |
-| [compiler/limitations.md](compiler/limitations.md) | Known limitations and workarounds |
+Today BASIS compiles to C. The long-term goal is not to replace every systems language, but to provide a constrained environment where critical embedded logic is easier to reason about, bound, test, and integrate with existing C firmware.
 
----
+## What BASIS Looks Like
 
-## Quick Start
-
-### Hello World
-```basis
-#[max_memory(1kb)]
-
-fn main() -> i32 {
-    return 0;
-}
-```
-
-### Compile and Run
-```bash
-python compiler/basis.py build hello.bs --run
-```
-
-### Library Mode (for linking with C)
-BASIS removes `while` loops entirely, so embedded apps typically use C or a HAL for scheduling:
-```bash
-python compiler/basis.py build --lib sensor.bs motor.bs --emit-c
-# Link generated C files with your C main loop
-```
-
-### With Standard Library
 ```basis
 #[max_memory(256kb)]
 
@@ -50,20 +22,117 @@ fn main() -> i32 {
 }
 ```
 
----
+## What It Focuses On
+
+- deterministic, bounded control flow
+- explicit memory budgets per module
+- whole-program call-graph stack analysis
+- bounded heap/resource accounting
+- interrupt-safe code validation
+- explicit foreign-function effect contracts
+- C code generation for host and embedded integration
+
+## Current State
+
+BASIS already has:
+- its own lexer, parser, semantic analysis, and type checker
+- compile-time resource analysis
+- no `while` loops; only bounded `for` loops remain
+- bounded recursion through `@recursion(max=N)`
+- interrupt handlers through `@interrupt`
+- explicit foreign-call contracts such as `@deterministic`, `@blocking`, `@allocates`, and `@isr_safe`
+- a C backend and local examples/tests
+
+It is best understood today as a serious embedded language prototype moving toward a usable language platform.
+
+## Getting Started
+
+### Requirements
+
+- Python 3
+- `gcc` in `PATH` for host builds
+
+### Clone
+
+```bash
+git clone https://github.com/CodeforGood1/Basis.git
+cd Basis
+```
+
+### First Build
+
+```bash
+python compiler/basis.py build examples/hello.bs --run
+```
+
+### Emit C Only
+
+```bash
+python compiler/basis.py build examples/hello.bs --emit-c
+```
+
+### Show Resource Analysis
+
+```bash
+python compiler/basis.py build examples/callgraph_demo.bs --show-resources --run
+```
+
+### Verify the Install
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run_local_checks.ps1
+```
+
+### Optional: Make `basis` Easy to Run
+
+If you want a shell command instead of calling Python directly, add the repo's `compiler` folder to your `PATH` and use the provided launcher script on Windows.
+
+### Build as a C-Linked Library
+
+```bash
+python compiler/basis.py build --lib examples/isr_demo.bs --emit-c --target esp32
+```
+
+This generates C output that can be linked into an existing C or embedded firmware project.
+
+## Deployment / Use Modes
+
+There are two main ways to use BASIS today:
+
+### 1. Host Executable
+
+Use BASIS as a normal compiled language on your machine:
+
+```bash
+python compiler/basis.py build my_program.bs --run
+```
+
+### 2. Embedded / C Integration
+
+Use BASIS as a constrained logic layer that compiles to C:
+
+```bash
+python compiler/basis.py build --lib control.bs --emit-c --target esp32
+```
+
+Then compile the generated C with your existing firmware stack, HAL, or SDK.
 
 ## Key Features
 
-### 1. Mandatory Memory Budget
-Every BASIS file declares its maximum memory usage:
-```basis
-#[max_memory(256kb)]   // Arduino Uno
-#[max_memory(32kb)]    // STM32F103
-#[max_memory(512b)]    // Tiny MCU
-```
-This enables linking with C code for scheduling/control loops.
+### Explicit Memory Budget
 
-### 2. Compile-Time Resource Analysis
+Every BASIS file declares a maximum memory budget:
+
+```basis
+#[max_memory(256kb)]
+#[max_memory(32kb)]
+#[max_memory(512b)]
+```
+
+### Compile-Time Resource Analysis
+
+The compiler reports stack, heap, code-size estimate, and deepest call path:
+
 ```
 ======================================================================
 RESOURCE ANALYSIS
@@ -77,43 +146,24 @@ Program Size Summary:
   TOTAL:             1232 bytes (1.20 KB)
   Deepest path:  main -> filter -> accumulate
 ======================================================================
-
-Memory Budget: 1232/262144 bytes (0.5% used)
-[OK] Program fits within declared memory budget
 ```
 
-### 3. Static Safety Checks
-- **Array bounds** - Checked at compile time
-- **Recursion depth** - Must be annotated with `@recursion(max=N)`
-- **Call-graph stack** - Deepest reachable stack is computed across function calls
-- **Loop termination** - `while` loops are rejected; only bounded `for` loops remain
-- **Heap allocation** - Sizes must be compile-time constants
-- **Extern contracts** - `extern fn` declarations must provide `@stack(N)` and an explicit determinism contract
-- **ISR validation** - `@interrupt` handlers must be deterministic, heap-free, and ISR-safe
+### Static Safety Checks
 
-### 4. Standard Library
-```
-stdlib/
-├── core/    # abs, min, max, clamp
-├── mem/     # alloc_bytes, free_bytes, alloc_i32
-├── io/      # print, println, out_i32, out_u32
-└── math/    # square, cube, power, is_even, sign
-```
+- array bounds checks
+- bounded recursion checks
+- whole-program stack checks
+- heap size checks
+- interrupt validation
+- explicit foreign-function contracts
 
----
+## Documentation Index
 
-## Compiler Usage
-
-```bash
-# Build only
-python compiler/basis.py build main.bs
-
-# Build and run
-python compiler/basis.py build main.bs --run
-
-# Show all resources
-python compiler/basis.py build main.bs --show-resources
-```
+| Document | Description |
+|----------|-------------|
+| [compiler/syntax.md](compiler/syntax.md) | Complete language syntax reference |
+| [compiler/safeguards.md](compiler/safeguards.md) | Safety guarantees and compile-time checks |
+| [compiler/limitations.md](compiler/limitations.md) | Known limitations and workarounds |
 
 ---
 
