@@ -1,0 +1,204 @@
+{
+  "name": "sample_program",
+  "target": "host",
+  "profile": "strict",
+  "entry": {
+    "module": "sample",
+    "name": "main"
+  },
+  "modules": [
+    {
+      "name": "sample",
+      "source_path": "tests/cases/sample.bs",
+      "attrs": {
+        "max_memory": 4096,
+        "max_storage": 256,
+        "max_storage_objects": 4,
+        "strict": true
+      },
+      "imports": [
+        {
+          "module_name": "io",
+          "items": [
+            "print_i32"
+          ],
+          "is_wildcard": false
+        }
+      ],
+      "exports": [
+        {
+          "module": "sample",
+          "name": "main"
+        }
+      ],
+      "globals": [
+        {
+          "name": "boot_count",
+          "visibility": "private",
+          "type": {
+            "kind": "u32",
+            "elem": null,
+            "len": null,
+            "fields": []
+          },
+          "initializer": "0"
+        }
+      ],
+      "functions": [
+        {
+          "name": "main",
+          "visibility": "entry",
+          "params": [],
+          "returns": {
+            "kind": "i32",
+            "elem": null,
+            "len": null,
+            "fields": []
+          },
+          "attrs": {
+            "recursion_max": null,
+            "interrupt": false,
+            "task_stack": null,
+            "task_priority": null,
+            "deterministic": true,
+            "blocking": false,
+            "allocates_max": null,
+            "reentrant": true,
+            "isr_safe": true,
+            "uses_timer": false,
+            "may_fail": false,
+            "storage_bytes": null,
+            "storage_objects": null
+          },
+          "effects": {
+            "deterministic": true,
+            "blocking": false,
+            "allocates": null,
+            "uses_storage": false,
+            "isr_safe": true
+          },
+          "resources": {
+            "stack_max": 32,
+            "heap_max": 0
+          },
+          "blocks": [
+            {
+              "name": "entry",
+              "instructions": [
+                {
+                  "kind": "call",
+                  "opcode": "print_i32",
+                  "result": {
+                    "name": "tmp0"
+                  },
+                  "operands": [
+                    {
+                      "name": "print_i32"
+                    },
+                    {
+                      "name": "boot_count"
+                    }
+                  ],
+                  "type": {
+                    "kind": "void",
+                    "elem": null,
+                    "len": null,
+                    "fields": []
+                  },
+                  "metadata": {
+                    "source_loc": {
+                      "path": "tests/cases/sample.bs",
+                      "line": 4,
+                      "column": 5,
+                      "end_line": 4,
+                      "end_column": 24
+                    },
+                    "effect_notes": [
+                      "deterministic call"
+                    ],
+                    "resource_notes": [
+                      "stack accounted"
+                    ]
+                  }
+                }
+              ],
+              "terminator": {
+                "kind": "ret",
+                "operands": [
+                  {
+                    "name": "zero"
+                  }
+                ],
+                "targets": []
+              }
+            }
+          ]
+        }
+      ],
+      "externs": [
+        {
+          "name": "print_i32",
+          "visibility": "public",
+          "params": [
+            {
+              "name": "value",
+              "type": {
+                "kind": "i32",
+                "elem": null,
+                "len": null,
+                "fields": []
+              }
+            }
+          ],
+          "returns": {
+            "kind": "void",
+            "elem": null,
+            "len": null,
+            "fields": []
+          },
+          "abi": "c",
+          "symbol_name": "print_i32",
+          "attrs": {
+            "recursion_max": null,
+            "interrupt": false,
+            "task_stack": null,
+            "task_priority": null,
+            "deterministic": true,
+            "blocking": true,
+            "allocates_max": null,
+            "reentrant": false,
+            "isr_safe": false,
+            "uses_timer": false,
+            "may_fail": false,
+            "storage_bytes": null,
+            "storage_objects": null
+          },
+          "effects": {
+            "deterministic": true,
+            "blocking": true,
+            "allocates": null,
+            "uses_storage": false,
+            "isr_safe": false
+          },
+          "resources": {
+            "stack_max": 64,
+            "heap_max": 0
+          }
+        }
+      ],
+      "resources": {
+        "stack_max": 32,
+        "heap_max": 0,
+        "storage_max": 0,
+        "code_size_estimate": 128,
+        "deepest_call_path": [
+          {
+            "module": "sample",
+            "name": "main"
+          }
+        ]
+      }
+    }
+  ],
+  "diagnostics": []
+}

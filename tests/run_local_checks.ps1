@@ -47,6 +47,11 @@ function Invoke-BasisCheck {
 }
 
 & python -m py_compile `
+    bir\__init__.py `
+    bir\lower.py `
+    bir\model.py `
+    bir\render.py `
+    bir\verify.py `
     compiler\basis.py `
     compiler\parser.py `
     compiler\sema.py `
@@ -54,7 +59,9 @@ function Invoke-BasisCheck {
     compiler\resource_analysis.py `
     compiler\codegen.py `
     compiler\module_codegen.py `
-    tests\semantic_regression_checks.py
+    tests\semantic_regression_checks.py `
+    tests\bir_regression_checks.py `
+    tests\bir_lowering_regression_checks.py
 
 if ($LASTEXITCODE -ne 0) {
     throw "python -m py_compile failed"
@@ -63,6 +70,16 @@ if ($LASTEXITCODE -ne 0) {
 & python tests\semantic_regression_checks.py
 if ($LASTEXITCODE -ne 0) {
     throw "semantic regression checks failed"
+}
+
+& python tests\bir_regression_checks.py
+if ($LASTEXITCODE -ne 0) {
+    throw "BIR regression checks failed"
+}
+
+& python tests\bir_lowering_regression_checks.py
+if ($LASTEXITCODE -ne 0) {
+    throw "BIR lowering regression checks failed"
 }
 
 $hostExamples = @(
