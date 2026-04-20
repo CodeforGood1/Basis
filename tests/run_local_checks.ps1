@@ -15,8 +15,19 @@ function Invoke-BasisCheck {
         [string[]]$RequiredText = @()
     )
 
-    $output = (& python compiler\basis.py @CommandArgs 2>&1 | Out-String)
-    $exitCode = $LASTEXITCODE
+    $hasNativeErrorPreference = Test-Path Variable:PSNativeCommandUseErrorActionPreference
+    if ($hasNativeErrorPreference) {
+        $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+        $PSNativeCommandUseErrorActionPreference = $false
+    }
+    try {
+        $output = (& python compiler\basis.py @CommandArgs 2>&1 | Out-String)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        if ($hasNativeErrorPreference) {
+            $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+        }
+    }
 
     if ($ExpectSuccess -and $exitCode -ne 0) {
         throw "Command failed: python compiler\basis.py $($CommandArgs -join ' ')`n$output"
@@ -42,10 +53,16 @@ function Invoke-BasisCheck {
     compiler\loop_analysis.py `
     compiler\resource_analysis.py `
     compiler\codegen.py `
-    compiler\module_codegen.py
+    compiler\module_codegen.py `
+    tests\semantic_regression_checks.py
 
 if ($LASTEXITCODE -ne 0) {
     throw "python -m py_compile failed"
+}
+
+& python tests\semantic_regression_checks.py
+if ($LASTEXITCODE -ne 0) {
+    throw "semantic regression checks failed"
 }
 
 $hostExamples = @(
@@ -198,6 +215,27 @@ Invoke-BasisCheck `
     -CommandArgs @("build", "tests\cases\invalid_region_expr.bs") `
     -ExpectSuccess $false `
     -RequiredText @("E_INVALID_REGION")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\heuristic_budget_emit_c.bs", "--emit-c") `
+    -RequiredText @("Memory Budget:", "Generated C code in")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\heuristic_budget_emit_c.bs") `
+    -RequiredText @("Memory Budget:", "Built executable:")
+
+$budgetOutput = (& cmd /c "python compiler\basis.py build tests\cases\exact_code_budget_fail.bs --emit-c 2>&1" | Out-String)
+$budgetExit = $LASTEXITCODE
+if ($budgetExit -eq 0) {
+    throw "Command unexpectedly succeeded: python compiler\basis.py build tests\cases\exact_code_budget_fail.bs --emit-c`n$budgetOutput"
+}
+if (-not $budgetOutput.Contains("ERROR: Program exceeds declared memory budget!")) {
+    throw "Expected exact code budget failure output to contain the budget error.`n$budgetOutput"
+}
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\heuristic_budget_emit_c.bs", "--emit-c", "--target-config", "tests\cases\tiny_flash_target.json") `
+    -RequiredText @("Code:  not validated (target artifact size unavailable)")
 
 if ($VerifyPackage) {
     & powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Clean -Package

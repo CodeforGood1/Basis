@@ -1,0 +1,5 @@
+#[max_memory(64b)]
+
+fn main() -> i32 {
+    return 0;
+}

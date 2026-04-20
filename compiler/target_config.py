@@ -121,7 +121,7 @@ class TargetConfig:
             return int(size_str)
     
     def validate_resources(self, total_stack: int, total_heap: int, 
-                          code_size: int) -> Optional[str]:
+                          code_size: Optional[int] = None) -> Optional[str]:
         """
         Validate resource usage against target limits.
         Returns error message if limits exceeded, None if OK.
@@ -153,8 +153,8 @@ class TargetConfig:
                 f"{self.target.ram_bytes}B available"
             )
         
-        # Check flash/code size
-        if code_size > self.target.flash_bytes:
+        # Check flash/code size when an exact target artifact size is available
+        if code_size is not None and code_size > self.target.flash_bytes:
             errors.append(
                 f"Flash overflow: {code_size}B used > "
                 f"{self.target.flash_bytes}B available"

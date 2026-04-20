@@ -1,0 +1,6 @@
+{
+  "name": "tiny-flash",
+  "ram": "1MB",
+  "flash": "128B",
+  "stack": "64KB"
+}

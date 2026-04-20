@@ -7,6 +7,7 @@ import sys
 import os
 import argparse
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Dict
 
@@ -39,6 +40,114 @@ def to_native_tool_path(pathlike) -> str:
         if path.startswith("\\\\?\\"):
             return path[4:]
     return path
+
+
+@dataclass
+class CodeSizeInfo:
+    display_bytes: int
+    exact_bytes: Optional[int]
+    summary_label: str
+    note: Optional[str] = None
+
+
+def estimate_code_size_bytes(modules: Dict[str, Module]) -> int:
+    """Fallback heuristic used only when no linked artifact is available."""
+    total_functions = sum(
+        len([decl for decl in module.declarations if isinstance(decl, FunctionDecl)])
+        for module in modules.values()
+    )
+    return total_functions * 100
+
+
+def parse_size_total(size_output: str) -> Optional[int]:
+    """Extract the total byte count from `size -A` output."""
+    for line in reversed(size_output.splitlines()):
+        stripped = line.strip()
+        if not stripped.startswith("Total"):
+            continue
+        parts = stripped.split()
+        if len(parts) >= 2 and parts[1].isdigit():
+            return int(parts[1])
+    return None
+
+
+def compile_objects(c_files: List[Path], output_path: Path) -> List[Path]:
+    """Compile generated C files to object files for size measurement and linking."""
+    object_files: List[Path] = []
+    for c_file in c_files:
+        object_path = output_path / f"{c_file.stem}.o"
+        compile_cmd = [
+            "gcc",
+            "-std=c99",
+            "-c",
+            to_native_tool_path(c_file),
+            "-o",
+            to_native_tool_path(object_path),
+        ]
+        result = subprocess.run(compile_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            details = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(details or f"failed to compile {c_file.name} to object code")
+        object_files.append(object_path)
+    return object_files
+
+
+def measure_object_code_size(object_files: List[Path]) -> int:
+    """Measure compiled code size using object section totals."""
+    total_bytes = 0
+    for object_file in object_files:
+        size_cmd = ["size", "-A", to_native_tool_path(object_file)]
+        result = subprocess.run(size_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            details = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(details or f"failed to inspect {object_file.name}")
+        measured = parse_size_total(result.stdout)
+        if measured is None:
+            raise RuntimeError(f"unable to parse code size for {object_file.name}")
+        total_bytes += measured
+    return total_bytes
+
+
+def build_code_size_info(
+    estimated_code_size: int,
+    exact_code_size: Optional[int],
+    *,
+    emit_c_only: bool,
+    is_library: bool,
+    fallback_reason: Optional[str] = None,
+) -> CodeSizeInfo:
+    """Describe how code size should be reported and whether it is enforceable."""
+    if exact_code_size is not None:
+        return CodeSizeInfo(
+            display_bytes=exact_code_size,
+            exact_bytes=exact_code_size,
+            summary_label="Code",
+        )
+
+    if emit_c_only:
+        note = (
+            "Code size is estimated only because --emit-c skips binary generation; "
+            "code bytes are not enforced in #[max_memory] or flash budgets."
+        )
+    elif is_library:
+        note = (
+            "Code size is estimated only for --lib builds; "
+            "code bytes are not enforced in #[max_memory] or flash budgets."
+        )
+    else:
+        note = (
+            "Code size could not be measured; falling back to an estimate for reporting only."
+        )
+
+    if fallback_reason:
+        note = f"{note} Reason: {fallback_reason}"
+
+    return CodeSizeInfo(
+        display_bytes=estimated_code_size,
+        exact_bytes=None,
+        summary_label="Code (~)",
+        note=note,
+    )
 
 
 def validate_main_function(modules: Dict[str, Module], is_library_build: bool = False) -> Optional[str]:
@@ -154,7 +263,7 @@ def compile_basis(input_files: List[str],
     # Create output directory (clean stale build artifacts to avoid linking old files)
     output_path = Path(output_dir).resolve()
     output_path.mkdir(parents=True, exist_ok=True)
-    for stale in list(output_path.glob("*.c")) + list(output_path.glob("*.h")):
+    for stale in list(output_path.glob("*.c")) + list(output_path.glob("*.h")) + list(output_path.glob("*.o")):
         stale.unlink()
     
     # Module registry for imports
@@ -202,6 +311,7 @@ def compile_basis(input_files: List[str],
                 
                 modules[module_name] = parsed_module
                 processed_modules.add(module_name)
+                registry.register_known_module(module_name)
                 
                 # Recursively load any imports in this module
                 for decl in parsed_module.declarations:
@@ -251,6 +361,7 @@ def compile_basis(input_files: List[str],
         
         modules[module_name] = module
         processed_modules.add(module_name)
+        registry.register_known_module(module_name)
         
         # Auto-discover and load imported modules
         for decl in module.declarations:
@@ -388,10 +499,9 @@ def compile_basis(input_files: List[str],
         return 1
     
     # ========================================================================
-    # Display Resource Usage (ALWAYS)
+    # Calculate resource usage that does not depend on linked artifacts
     # ========================================================================
     
-    # Calculate total resource usage
     entry_function_names = []
     for module_name, module in modules.items():
         for decl in module.declarations:
@@ -426,67 +536,8 @@ def compile_basis(input_files: List[str],
         total_storage_bytes += resource.storage_bytes
         total_storage_objects += resource.storage_objects
     total_task_stack = sum(resource.task_stack_bytes for resource in all_resources.values())
-    
-    # Estimate code size (rough estimate: 100 bytes per function)
-    total_functions = sum(
-        len([d for d in m.declarations if isinstance(d, FunctionDecl)])
-        for m in modules.values()
-    )
-    estimated_code_size = total_functions * 100
-    total_program_size = total_stack + total_heap + total_task_stack + estimated_code_size
-    
-    print("\n" + "="*70)
-    print("RESOURCE ANALYSIS")
-    print("="*70)
-    
-    if show_resources:
-        # Detailed per-function view
-        for module_name in modules.keys():
-            print(f"\nModule: {module_name}")
-            print("-" * 70)
-            
-            all_resources = program_resources.get_module_resources(module_name)
-            if not all_resources:
-                print("  (no functions)")
-                continue
-            
-            for func_name, resource in all_resources.items():
-                print(f"\n  Function: {func_name}()")
-                print(f"    Frame:     {resource.frame_stack_bytes:6d} bytes")
-                print(f"    Stack:     {resource.stack_bytes:6d} bytes")
-                print(f"    Heap:      {resource.heap_bytes:6d} bytes")
-                print(f"    Storage:   {resource.storage_bytes:6d} bytes / {resource.storage_objects:3d} objects")
-                if resource.recursion_depth is not None:
-                    print(f"    Recursion: depth {resource.recursion_depth}")
-                print(f"    Deterministic: {'yes' if resource.deterministic else 'no'}")
-                print(f"    ISR-safe:      {'yes' if resource.isr_safe else 'no'}")
-                print(f"    Blocking:      {'yes' if resource.blocking else 'no'}")
-                print(f"    Allocates:     {'yes' if resource.allocates else 'no'}")
-                print(f"    Reentrant:     {'yes' if resource.reentrant else 'no'}")
-                print(f"    May fail:      {'yes' if resource.may_fail else 'no'}")
-                print(f"    Uses timer:    {'yes' if resource.uses_timer else 'no'}")
-                if resource.is_interrupt:
-                    print(f"    Interrupt:     yes")
-                if resource.is_task:
-                    print(f"    Task:          yes ({resource.task_stack_bytes}B stack)")
-                if resource.call_path:
-                    print(f"    Deepest path:  {' -> '.join(resource.call_path)}")
-    
-    # Always show totals
-    print(f"\nProgram Size Summary:")
-    print(f"  Stack (max):   {total_stack:8d} bytes")
-    print(f"  Heap (total):  {total_heap:8d} bytes")
-    print(f"  Task stack:    {total_task_stack:8d} bytes")
-    print(f"  Storage use:   {total_storage_bytes:8d} bytes / {total_storage_objects} objects")
-    print(f"  Code (~):      {estimated_code_size:8d} bytes")
-    print(f"  -------------------------------")
-    print(f"  TOTAL:         {total_program_size:8d} bytes ({total_program_size / 1024:.2f} KB)")
-    if deepest_path:
-        print(f"  Deepest path:  {' -> '.join(deepest_path)}")
-    recursive_cycles = program_resources.get_recursive_cycles()
-    if recursive_cycles:
-        print(f"  Call cycles:   {len(recursive_cycles)}")
-    print("="*70)
+    runtime_memory_size = total_stack + total_heap + total_task_stack
+    estimated_code_size = estimate_code_size_bytes(modules)
     
     # ========================================================================
     # Validate max_memory directive (required for ALL files)
@@ -533,29 +584,222 @@ def compile_basis(input_files: List[str],
             if name not in stdlib_modules and module.max_memory_bytes
         )
     
-    if max_memory_declared:
-        
-        # Validate program fits within declared memory
-        if total_program_size > max_memory_declared:
-            print(f"\n" + "!"*70, file=sys.stderr)
-            print(f"ERROR: Program exceeds declared memory budget!", file=sys.stderr)
-            print(f"!"*70, file=sys.stderr)
-            print(f"\n  Declared max_memory: {max_memory_declared:8d} bytes ({max_memory_declared / 1024:.2f} KB)", 
-                  file=sys.stderr)
-            print(f"  Actual program size: {total_program_size:8d} bytes ({total_program_size / 1024:.2f} KB)", 
-                  file=sys.stderr)
-            print(f"  Overflow:            {total_program_size - max_memory_declared:8d} bytes", 
-                  file=sys.stderr)
-            print(f"\nEither reduce program size or increase #[max_memory(SIZE)].", 
+    # ========================================================================
+    # Validate main() function
+    # ========================================================================
+    
+    main_error = validate_main_function(modules, is_library_build=is_library)
+    if main_error:
+        print(f"error: {main_error}", file=sys.stderr)
+        return 1
+    
+    # ========================================================================
+    # STAGE 8: Code Generation
+    # ========================================================================
+    
+    # In library mode, export all functions for C linkage
+    codegen = ModuleCodeGenerator(diag, export_all=is_library)
+    for module in modules.values():
+        codegen.add_module(module)
+    
+    success = codegen.generate_all(output_path)
+    
+    if not success or diag.has_errors():
+        diag.print_all()
+        return 1
+    
+    print(f"Generated C code in {to_native_tool_path(output_path)}")
+    
+    c_files = sorted(output_path.glob("*.c"))
+    if not c_files:
+        print("error: no C files generated", file=sys.stderr)
+        return 1
+
+    object_files: List[Path] = []
+    exact_code_size = None
+    code_size_fallback_reason = None
+    allow_measurement_fallback = emit_c_only or is_library
+
+    try:
+        object_files = compile_objects(c_files, output_path)
+        exact_code_size = measure_object_code_size(object_files)
+    except FileNotFoundError as exc:
+        if allow_measurement_fallback:
+            code_size_fallback_reason = str(exc)
+        else:
+            print("error: gcc/binutils not found. Please install gcc and ensure gcc and size are in PATH.",
                   file=sys.stderr)
             return 1
+    except RuntimeError as exc:
+        if allow_measurement_fallback:
+            code_size_fallback_reason = str(exc)
+        else:
+            print("error: object compilation failed", file=sys.stderr)
+            print(str(exc), file=sys.stderr)
+            return 1
+
+    binary_path: Optional[Path] = None
+    if not emit_c_only and not is_library:
+        # ====================================================================
+        # GCC Linking
+        # ====================================================================
         
-        # Show memory budget status
-        used_percent = (total_program_size / max_memory_declared) * 100
-        remaining = max_memory_declared - total_program_size
-        print(f"\nMemory Budget: {total_program_size}/{max_memory_declared} bytes ({used_percent:.1f}% used)")
-        print(f"Remaining:     {remaining} bytes ({remaining / 1024:.2f} KB)")
-        print("[OK] Program fits within declared memory budget\n")
+        # Determine binary name
+        binary_name = "app.exe" if sys.platform == "win32" else "app"
+        binary_path = output_path / binary_name
+        
+        # Build gcc command
+        gcc_cmd = ["gcc", "-std=c99", "-o", to_native_tool_path(binary_path)]
+        gcc_cmd.extend(to_native_tool_path(f) for f in object_files)
+        
+        print(f"Compiling with gcc...")
+        
+        try:
+            result = subprocess.run(gcc_cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                print("error: gcc compilation failed", file=sys.stderr)
+                if result.stderr:
+                    print(result.stderr, file=sys.stderr)
+                if result.stdout:
+                    print(result.stdout, file=sys.stderr)
+                return 1
+        except FileNotFoundError:
+            print("error: gcc not found. Please install gcc and ensure it's in PATH.", 
+                  file=sys.stderr)
+            return 1
+        except Exception as e:
+            print(f"error: failed to invoke gcc: {e}", file=sys.stderr)
+            return 1
+        
+        print(f"Built executable: {to_native_tool_path(binary_path)}")
+
+    code_size_info = build_code_size_info(
+        estimated_code_size,
+        exact_code_size,
+        emit_c_only=emit_c_only,
+        is_library=is_library,
+        fallback_reason=code_size_fallback_reason,
+    )
+    total_program_size = runtime_memory_size + (code_size_info.exact_bytes or 0)
+
+    print("\n" + "="*70)
+    print("RESOURCE ANALYSIS")
+    print("="*70)
+    
+    if show_resources:
+        # Detailed per-function view
+        for module_name in modules.keys():
+            print(f"\nModule: {module_name}")
+            print("-" * 70)
+            
+            all_resources = program_resources.get_module_resources(module_name)
+            if not all_resources:
+                print("  (no functions)")
+                continue
+            
+            for func_name, resource in all_resources.items():
+                print(f"\n  Function: {func_name}()")
+                print(f"    Frame:     {resource.frame_stack_bytes:6d} bytes")
+                print(f"    Stack:     {resource.stack_bytes:6d} bytes")
+                print(f"    Heap:      {resource.heap_bytes:6d} bytes")
+                print(f"    Storage:   {resource.storage_bytes:6d} bytes / {resource.storage_objects:3d} objects")
+                if resource.recursion_depth is not None:
+                    print(f"    Recursion: depth {resource.recursion_depth}")
+                print(f"    Deterministic: {'yes' if resource.deterministic else 'no'}")
+                print(f"    ISR-safe:      {'yes' if resource.isr_safe else 'no'}")
+                print(f"    Blocking:      {'yes' if resource.blocking else 'no'}")
+                print(f"    Allocates:     {'yes' if resource.allocates else 'no'}")
+                print(f"    Reentrant:     {'yes' if resource.reentrant else 'no'}")
+                print(f"    May fail:      {'yes' if resource.may_fail else 'no'}")
+                print(f"    Uses timer:    {'yes' if resource.uses_timer else 'no'}")
+                if resource.is_interrupt:
+                    print(f"    Interrupt:     yes")
+                if resource.is_task:
+                    print(f"    Task:          yes ({resource.task_stack_bytes}B stack)")
+                if resource.call_path:
+                    print(f"    Deepest path:  {' -> '.join(resource.call_path)}")
+    
+    print(f"\nProgram Size Summary:")
+    print(f"  Stack (max):   {total_stack:8d} bytes")
+    print(f"  Heap (total):  {total_heap:8d} bytes")
+    print(f"  Task stack:    {total_task_stack:8d} bytes")
+    print(f"  Storage use:   {total_storage_bytes:8d} bytes / {total_storage_objects} objects")
+    print(f"  {code_size_info.summary_label}: {code_size_info.display_bytes:8d} bytes")
+    print(f"  -------------------------------")
+    if code_size_info.exact_bytes is not None:
+        print(f"  TOTAL:         {total_program_size:8d} bytes ({total_program_size / 1024:.2f} KB)")
+    else:
+        estimated_total = runtime_memory_size + code_size_info.display_bytes
+        print(f"  Runtime total: {runtime_memory_size:8d} bytes ({runtime_memory_size / 1024:.2f} KB)")
+        print(f"  Total + est.:  {estimated_total:8d} bytes ({estimated_total / 1024:.2f} KB)")
+    if deepest_path:
+        print(f"  Deepest path:  {' -> '.join(deepest_path)}")
+    recursive_cycles = program_resources.get_recursive_cycles()
+    if recursive_cycles:
+        print(f"  Call cycles:   {len(recursive_cycles)}")
+    if code_size_info.note:
+        print(f"  Note:          {code_size_info.note}")
+    print("="*70)
+
+    if max_memory_declared:
+        if code_size_info.exact_bytes is not None:
+            if total_program_size > max_memory_declared:
+                print(f"\n" + "!"*70, file=sys.stderr)
+                print(f"ERROR: Program exceeds declared memory budget!", file=sys.stderr)
+                print(f"!"*70, file=sys.stderr)
+                print(
+                    f"\n  Declared max_memory: {max_memory_declared:8d} bytes ({max_memory_declared / 1024:.2f} KB)",
+                    file=sys.stderr,
+                )
+                print(
+                    f"  Actual program size: {total_program_size:8d} bytes ({total_program_size / 1024:.2f} KB)",
+                    file=sys.stderr,
+                )
+                print(
+                    f"  Overflow:            {total_program_size - max_memory_declared:8d} bytes",
+                    file=sys.stderr,
+                )
+                print(
+                    f"\nEither reduce program size or increase #[max_memory(SIZE)].",
+                    file=sys.stderr,
+                )
+                return 1
+
+            used_percent = (total_program_size / max_memory_declared) * 100
+            remaining = max_memory_declared - total_program_size
+            print(f"\nMemory Budget: {total_program_size}/{max_memory_declared} bytes ({used_percent:.1f}% used)")
+            print(f"Remaining:     {remaining} bytes ({remaining / 1024:.2f} KB)")
+            print("[OK] Program fits within declared memory budget\n")
+        else:
+            if runtime_memory_size > max_memory_declared:
+                print(f"\n" + "!"*70, file=sys.stderr)
+                print(f"ERROR: Runtime memory exceeds declared memory budget!", file=sys.stderr)
+                print(f"!"*70, file=sys.stderr)
+                print(
+                    f"\n  Declared max_memory: {max_memory_declared:8d} bytes ({max_memory_declared / 1024:.2f} KB)",
+                    file=sys.stderr,
+                )
+                print(
+                    f"  Runtime memory use:  {runtime_memory_size:8d} bytes ({runtime_memory_size / 1024:.2f} KB)",
+                    file=sys.stderr,
+                )
+                print(
+                    f"  Overflow:            {runtime_memory_size - max_memory_declared:8d} bytes",
+                    file=sys.stderr,
+                )
+                print(
+                    f"\nLink the program to measure code size, or reduce runtime memory usage.",
+                    file=sys.stderr,
+                )
+                return 1
+
+            used_percent = (runtime_memory_size / max_memory_declared) * 100
+            remaining = max_memory_declared - runtime_memory_size
+            print(
+                f"\nMemory Budget (runtime only): {runtime_memory_size}/{max_memory_declared} bytes ({used_percent:.1f}% used)"
+            )
+            print(f"Remaining:                  {remaining} bytes ({remaining / 1024:.2f} KB)")
+            print("Code bytes were not enforced because no linked artifact was produced.\n")
 
     max_storage_declared = sum(
         module.directives.get("max_storage", 0)
@@ -595,103 +839,30 @@ def compile_basis(input_files: List[str],
             print(f"  Actual task stack use:  {total_task_stack} bytes", file=sys.stderr)
             return 1
         print(f"Task Stack Budget: {total_task_stack}/{max_task_stack_declared} bytes")
-    
-    # ========================================================================
-    # Resource Validation Against Target Limits (optional --target flag)
-    # ========================================================================
-    
+
     if target_config:
-        # Validate against target limits (using already computed totals)
         validation_error = target_config.validate_resources(
-            total_stack, total_heap, estimated_code_size
+            total_stack,
+            total_heap,
+            code_size=None,
         )
-        
+
         if validation_error:
             print(f"error: target resource limits exceeded:", file=sys.stderr)
             print(f"\n{target_config.get_limits_summary()}", file=sys.stderr)
             print(f"\nUsage:", file=sys.stderr)
             print(f"  Stack: {total_stack}B", file=sys.stderr)
             print(f"  Heap:  {total_heap}B", file=sys.stderr)
-            print(f"  Code:  ~{estimated_code_size}B", file=sys.stderr)
             print(f"\n{validation_error}", file=sys.stderr)
             return 1
-        
+
         print(f"\n[OK] Resource validation passed for target: {target_config.target.name}")
         print(f"  Stack: {total_stack}B / {target_config.target.stack_bytes}B")
         print(f"  Heap:  {total_heap}B")
-        print(f"  Code:  ~{estimated_code_size}B / {target_config.target.flash_bytes}B")
-    
-    # ========================================================================
-    # Validate main() function
-    # ========================================================================
-    
-    main_error = validate_main_function(modules, is_library_build=is_library)
-    if main_error:
-        print(f"error: {main_error}", file=sys.stderr)
-        return 1
-    
-    # ========================================================================
-    # STAGE 8: Code Generation
-    # ========================================================================
-    
-    # In library mode, export all functions for C linkage
-    codegen = ModuleCodeGenerator(diag, export_all=is_library)
-    for module in modules.values():
-        codegen.add_module(module)
-    
-    success = codegen.generate_all(output_path)
-    
-    if not success or diag.has_errors():
-        diag.print_all()
-        return 1
-    
-    print(f"Generated C code in {to_native_tool_path(output_path)}")
-    
-    # Stop here if --emit-c
-    if emit_c_only:
-        return 0
+        print(f"  Code:  not validated (target artifact size unavailable)")
 
-    # Skip linking for library builds
-    if is_library:
+    if emit_c_only or is_library:
         return 0
-    
-    # ========================================================================
-    # GCC Compilation
-    # ========================================================================
-    
-    c_files = sorted(output_path.glob("*.c"))
-    if not c_files:
-        print("error: no C files generated", file=sys.stderr)
-        return 1
-    
-    # Determine binary name
-    binary_name = "app.exe" if sys.platform == "win32" else "app"
-    binary_path = output_path / binary_name
-    
-    # Build gcc command
-    gcc_cmd = ["gcc", "-std=c99", "-o", to_native_tool_path(binary_path)]
-    gcc_cmd.extend(to_native_tool_path(f) for f in c_files)
-    
-    print(f"Compiling with gcc...")
-    
-    try:
-        result = subprocess.run(gcc_cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print("error: gcc compilation failed", file=sys.stderr)
-            if result.stderr:
-                print(result.stderr, file=sys.stderr)
-            if result.stdout:
-                print(result.stdout, file=sys.stderr)
-            return 1
-    except FileNotFoundError:
-        print("error: gcc not found. Please install gcc and ensure it's in PATH.", 
-              file=sys.stderr)
-        return 1
-    except Exception as e:
-        print(f"error: failed to invoke gcc: {e}", file=sys.stderr)
-        return 1
-    
-    print(f"Built executable: {to_native_tool_path(binary_path)}")
     
     # ========================================================================
     # Run executable if --run

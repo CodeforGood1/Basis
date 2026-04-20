@@ -87,24 +87,26 @@ class ModuleRegistry:
     """Tracks available modules for import validation."""
     
     def __init__(self):
-        # Stub: In real implementation, this would scan filesystem or manifest
-        # For now, we'll just track modules we've analyzed
+        self.known_modules: Set[str] = set()
         self.modules: Dict[str, Dict[str, Symbol]] = {}
+
+    def register_known_module(self, name: str):
+        """Record that a module was discovered by the loader."""
+        self.known_modules.add(name)
     
     def register_module(self, name: str, exports: Dict[str, Symbol]):
         """Register a module's public exports."""
         public_exports = {k: v for k, v in exports.items() if v.is_public()}
         self.modules[name] = public_exports
+        self.known_modules.add(name)
     
     def get_module(self, name: str) -> Optional[Dict[str, Symbol]]:
         """Get public exports from a module."""
         return self.modules.get(name)
     
     def module_exists(self, name: str) -> bool:
-        """Check if module exists (stub: always true for now)."""
-        # In real implementation, check filesystem or manifest
-        # For now, assume all imports are valid modules
-        return True
+        """Check if the loader discovered the module."""
+        return name in self.known_modules
     
     def get_symbol(self, module_name: str, symbol_name: str) -> Optional[Symbol]:
         """Get a specific symbol from a module."""
