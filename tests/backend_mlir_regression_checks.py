@@ -53,6 +53,7 @@ fn main() -> i32 {
     try:
         assert backend.generate_all(program, out_dir), "MLIR backend unexpectedly failed"
         artifact = (out_dir / "sample_program.mlir").read_text(encoding="utf-8")
+        llvm_artifact = (out_dir / "sample_program.llvm.mlir").read_text(encoding="utf-8")
 
         assert "basis.program @sample_program" in artifact
         assert "basis.module @sample" in artifact
@@ -63,6 +64,15 @@ fn main() -> i32 {
         assert 'region = "iram"' in artifact
         assert 'callee = "worker"' in artifact
         assert "basis.cond_br" in artifact
+
+        assert "builtin.module" in llvm_artifact
+        assert "llvm.module @sample" in llvm_artifact
+        assert "llvm.type @Pair = !llvm.struct" in llvm_artifact
+        assert "llvm.func @platform_tick" in llvm_artifact
+        assert "llvm.func @worker" in llvm_artifact
+        assert "llvm.call" in llvm_artifact
+        assert "llvm.icmp" in llvm_artifact
+        assert "llvm.cond_br" in llvm_artifact
     finally:
         for path in sorted(out_dir.glob("*")):
             path.unlink()

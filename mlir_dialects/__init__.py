@@ -12,6 +12,18 @@ from .basis import (
     render_basis_mlir_program,
     render_basis_type,
 )
+from .llvm import (
+    LlvmMlirBlock,
+    LlvmMlirExtern,
+    LlvmMlirFunction,
+    LlvmMlirGlobal,
+    LlvmMlirModule,
+    LlvmMlirOp,
+    LlvmMlirParam,
+    LlvmMlirProgram,
+    LlvmMlirTypeDecl,
+    render_llvm_mlir_program,
+)
 
 __all__ = [
     "BasisMlirBlock",
@@ -24,6 +36,16 @@ __all__ = [
     "BasisMlirOp",
     "BasisMlirProgram",
     "BasisMlirStruct",
+    "LlvmMlirBlock",
+    "LlvmMlirExtern",
+    "LlvmMlirFunction",
+    "LlvmMlirGlobal",
+    "LlvmMlirModule",
+    "LlvmMlirOp",
+    "LlvmMlirParam",
+    "LlvmMlirProgram",
+    "LlvmMlirTypeDecl",
     "render_basis_mlir_program",
     "render_basis_type",
+    "render_llvm_mlir_program",
 ]

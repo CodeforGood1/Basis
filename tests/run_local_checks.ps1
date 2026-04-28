@@ -47,6 +47,12 @@ function Invoke-BasisCheck {
 }
 
 & python -m py_compile `
+    backend_llvm\__init__.py `
+    backend_llvm\emitter.py `
+    backend_llvm\llvmlite_builder.py `
+    backend_llvm\llvm_ir.py `
+    backend_llvm\lower.py `
+    backend_llvm\verify.py `
     backend_mlir\__init__.py `
     backend_mlir\emitter.py `
     bir\__init__.py `
@@ -62,19 +68,25 @@ function Invoke-BasisCheck {
     compiler\codegen.py `
     compiler\module_codegen.py `
     mlir_conversions\__init__.py `
+    mlir_conversions\basis_to_llvm.py `
     mlir_conversions\bir_to_basis.py `
+    mlir_conversions\canonicalize.py `
+    mlir_conversions\type_converter.py `
     mlir_conversions\verify.py `
+    mlir_conversions\verify_llvm.py `
     mlir_dialects\__init__.py `
     mlir_dialects\basis.py `
     mlir_dialects\control.py `
     mlir_dialects\extern.py `
     mlir_dialects\isr.py `
+    mlir_dialects\llvm.py `
     mlir_dialects\mem.py `
     mlir_dialects\resource.py `
     tests\semantic_regression_checks.py `
     tests\bir_regression_checks.py `
     tests\bir_lowering_regression_checks.py `
     tests\backend_c_regression_checks.py `
+    tests\backend_llvm_regression_checks.py `
     tests\backend_mlir_regression_checks.py `
     tests\backend_selection_regression_checks.py `
     tests\pipeline_support.py
@@ -101,6 +113,11 @@ if ($LASTEXITCODE -ne 0) {
 & python tests\backend_c_regression_checks.py
 if ($LASTEXITCODE -ne 0) {
     throw "C backend regression checks failed"
+}
+
+& python tests\backend_llvm_regression_checks.py
+if ($LASTEXITCODE -ne 0) {
+    throw "LLVM backend regression checks failed"
 }
 
 & python tests\backend_mlir_regression_checks.py

@@ -29,6 +29,7 @@ from target_config import TargetConfig, PREDEFINED_TARGETS
 from bir.lower import BirLoweringError, LoweringInput, lower_validated_program
 from backend_c import BirCBackend, BirCBackendError
 from backend_mlir import BasisMlirBackend, BasisMlirBackendError
+from backend_llvm import BasisLlvmBackend, BasisLlvmBackendError
 
 
 def to_native_tool_path(pathlike) -> str:
@@ -212,8 +213,29 @@ def emit_backend(
             status="ok",
             artifact_dir=output_path,
             fallback_reason=(
-                "MLIR backend emits textual IR only; exact code size requires later MLIR/LLVM lowering phases."
+                "MLIR output is currently an internal lowering snapshot from BIR; production MLIR toolchain integration is still pending."
             ),
+            message=f"generated backend '{backend}' artifacts in {to_native_tool_path(output_path)}",
+        )
+
+    if backend == "llvm":
+        llvm_backend = BasisLlvmBackend(diag, export_all=export_all)
+        object_path = llvm_backend.generate_all(bir_program, output_path)
+        exact_code_size = None
+        fallback_reason = None
+        if object_path is not None:
+            try:
+                exact_code_size = measure_object_code_size([object_path])
+            except (FileNotFoundError, RuntimeError) as exc:
+                fallback_reason = str(exc)
+        else:
+            fallback_reason = "LLVM backend emitted verified .ll/.llvm.mlir artifacts only; object generation is host-only in the current configuration."
+        return BackendEmissionResult(
+            backend=backend,
+            status="ok",
+            artifact_dir=output_path,
+            exact_code_size=exact_code_size,
+            fallback_reason=fallback_reason,
             message=f"generated backend '{backend}' artifacts in {to_native_tool_path(output_path)}",
         )
 
@@ -913,7 +935,9 @@ def compile_basis(input_files: List[str],
         if backend == "c":
             print(f"Generated C code in {to_native_tool_path(output_path)}")
         elif backend == "mlir":
-            print(f"Generated MLIR artifacts in {to_native_tool_path(output_path)}")
+            print(f"Generated internal MLIR lowering artifacts in {to_native_tool_path(output_path)}")
+        elif backend == "llvm":
+            print(f"Generated LLVM artifacts in {to_native_tool_path(output_path)}")
 
     if diag.has_errors():
         diag.print_all()

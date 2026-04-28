@@ -12,8 +12,12 @@ from typing import Optional
 from diagnostics import DiagnosticEngine
 from bir.model import Program
 from mlir_conversions.bir_to_basis import convert_program_to_basis_mlir
+from mlir_conversions.basis_to_llvm import BasisToLlvmLoweringError, convert_basis_to_llvm_mlir
+from mlir_conversions.canonicalize import canonicalize_basis_mlir_program
 from mlir_conversions.verify import BasisMlirVerificationError, verify_basis_mlir_program
+from mlir_conversions.verify_llvm import LlvmMlirVerificationError, verify_llvm_mlir_program
 from mlir_dialects.basis import render_basis_mlir_program
+from mlir_dialects.llvm import render_llvm_mlir_program
 
 
 class BasisMlirBackendError(ValueError):
@@ -33,9 +37,15 @@ class BasisMlirBackend:
         try:
             basis_mlir_program = convert_program_to_basis_mlir(program, export_all=self.export_all)
             verify_basis_mlir_program(basis_mlir_program)
-        except BasisMlirVerificationError as exc:
+            canonical_program = canonicalize_basis_mlir_program(basis_mlir_program)
+            verify_basis_mlir_program(canonical_program)
+            llvm_mlir_program = convert_basis_to_llvm_mlir(canonical_program)
+            verify_llvm_mlir_program(llvm_mlir_program)
+        except (BasisMlirVerificationError, BasisToLlvmLoweringError, LlvmMlirVerificationError) as exc:
             raise BasisMlirBackendError(str(exc)) from exc
 
         artifact_path = output_dir / f"{program.name}.mlir"
-        artifact_path.write_text(render_basis_mlir_program(basis_mlir_program), encoding="utf-8")
+        artifact_path.write_text(render_basis_mlir_program(canonical_program), encoding="utf-8")
+        llvm_artifact_path = output_dir / f"{program.name}.llvm.mlir"
+        llvm_artifact_path.write_text(render_llvm_mlir_program(llvm_mlir_program), encoding="utf-8")
         return True

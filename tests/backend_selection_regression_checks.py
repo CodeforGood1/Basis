@@ -25,13 +25,13 @@ def assert_backend_c_explicit_flag_works():
 def assert_backend_mlir_explicit_flag_works():
     exit_code, output = run_basis("build", "examples/hello.bs", "--backend", "mlir", "--emit-c")
     assert exit_code == 0, output
-    assert "Generated MLIR artifacts in" in output
+    assert "Generated internal MLIR lowering artifacts in" in output
 
 
-def assert_unimplemented_llvm_backend_fails_fast():
-    exit_code, output = run_basis("build", "examples/hello.bs", "--backend", "llvm", "--emit-c")
-    assert exit_code != 0, output
-    assert "backend 'llvm' is not implemented yet" in output
+def assert_backend_llvm_explicit_flag_works():
+    exit_code, output = run_basis("build", "examples/hello.bs", "--backend", "llvm", "--emit-c", "-o", "./build-llvm-test")
+    assert exit_code == 0, output
+    assert "Generated LLVM artifacts in" in output
 
 
 def assert_compare_mode_reports_backend_status():
@@ -69,7 +69,7 @@ def assert_run_rejected_for_mlir_backend():
 if __name__ == "__main__":
     assert_backend_c_explicit_flag_works()
     assert_backend_mlir_explicit_flag_works()
-    assert_unimplemented_llvm_backend_fails_fast()
+    assert_backend_llvm_explicit_flag_works()
     assert_compare_mode_reports_backend_status()
     assert_compare_mode_rejects_run()
     assert_run_rejected_for_mlir_backend()
