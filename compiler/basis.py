@@ -9,7 +9,11 @@ import argparse
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Sequence
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import all compiler stages
 from lexer import Lexer
@@ -20,9 +24,11 @@ from typecheck import TypeChecker, check_types
 from consteval import evaluate_constants
 from loop_analysis import analyze_loops
 from resource_analysis import analyze_program_resources
-from module_codegen import ModuleCodeGenerator
 from ast_defs import Module, FunctionDecl, ImportDecl
 from target_config import TargetConfig, PREDEFINED_TARGETS
+from bir.lower import BirLoweringError, LoweringInput, lower_validated_program
+from backend_c import BirCBackend, BirCBackendError
+from backend_mlir import BasisMlirBackend, BasisMlirBackendError
 
 
 def to_native_tool_path(pathlike) -> str:
@@ -48,6 +54,20 @@ class CodeSizeInfo:
     exact_bytes: Optional[int]
     summary_label: str
     note: Optional[str] = None
+
+
+SUPPORTED_BACKENDS = ("c", "mlir", "llvm")
+
+
+@dataclass
+class BackendEmissionResult:
+    backend: str
+    status: str
+    artifact_dir: Path
+    exact_code_size: Optional[int] = None
+    binary_path: Optional[Path] = None
+    fallback_reason: Optional[str] = None
+    message: Optional[str] = None
 
 
 def estimate_code_size_bytes(modules: Dict[str, Module]) -> int:
@@ -114,6 +134,7 @@ def build_code_size_info(
     *,
     emit_c_only: bool,
     is_library: bool,
+    artifact_only_reason: Optional[str] = None,
     fallback_reason: Optional[str] = None,
 ) -> CodeSizeInfo:
     """Describe how code size should be reported and whether it is enforceable."""
@@ -124,7 +145,9 @@ def build_code_size_info(
             summary_label="Code",
         )
 
-    if emit_c_only:
+    if artifact_only_reason:
+        note = artifact_only_reason
+    elif emit_c_only:
         note = (
             "Code size is estimated only because --emit-c skips binary generation; "
             "code bytes are not enforced in #[max_memory] or flash budgets."
@@ -139,7 +162,7 @@ def build_code_size_info(
             "Code size could not be measured; falling back to an estimate for reporting only."
         )
 
-    if fallback_reason:
+    if fallback_reason and not artifact_only_reason:
         note = f"{note} Reason: {fallback_reason}"
 
     return CodeSizeInfo(
@@ -148,6 +171,156 @@ def build_code_size_info(
         summary_label="Code (~)",
         note=note,
     )
+
+
+def parse_backend_list(raw_value: Optional[str]) -> List[str]:
+    if not raw_value:
+        return []
+    requested = [item.strip() for item in raw_value.split(",") if item.strip()]
+    if not requested:
+        return []
+    invalid = [item for item in requested if item not in SUPPORTED_BACKENDS]
+    if invalid:
+        raise ValueError(
+            f"unsupported backend(s): {', '.join(invalid)}. "
+            f"Supported backends: {', '.join(SUPPORTED_BACKENDS)}"
+        )
+    ordered: List[str] = []
+    for backend in requested:
+        if backend not in ordered:
+            ordered.append(backend)
+    return ordered
+
+
+def emit_backend(
+    *,
+    backend: str,
+    bir_program,
+    diag: DiagnosticEngine,
+    output_path: Path,
+    export_all: bool,
+    emit_c_only: bool,
+    is_library: bool,
+) -> BackendEmissionResult:
+    if backend == "mlir":
+        mlir_backend = BasisMlirBackend(diag, export_all=export_all)
+        success = mlir_backend.generate_all(bir_program, output_path)
+        if not success or diag.has_errors():
+            raise BasisMlirBackendError("MLIR backend generation failed")
+        return BackendEmissionResult(
+            backend=backend,
+            status="ok",
+            artifact_dir=output_path,
+            fallback_reason=(
+                "MLIR backend emits textual IR only; exact code size requires later MLIR/LLVM lowering phases."
+            ),
+            message=f"generated backend '{backend}' artifacts in {to_native_tool_path(output_path)}",
+        )
+
+    if backend != "c":
+        phase = "Phase 7"
+        raise ValueError(
+            f"backend '{backend}' is not implemented yet; "
+            f"{phase} is still pending in the current workflow"
+        )
+
+    codegen = BirCBackend(diag, export_all=export_all)
+    success = codegen.generate_all(bir_program, output_path)
+    if not success or diag.has_errors():
+        raise BirCBackendError("C backend generation failed")
+
+    c_files = sorted(output_path.glob("*.c"))
+    if not c_files:
+        raise BirCBackendError("no C files generated")
+
+    object_files: List[Path] = []
+    exact_code_size = None
+    code_size_fallback_reason = None
+    allow_measurement_fallback = emit_c_only or is_library
+
+    try:
+        object_files = compile_objects(c_files, output_path)
+        exact_code_size = measure_object_code_size(object_files)
+    except FileNotFoundError as exc:
+        if allow_measurement_fallback:
+            code_size_fallback_reason = str(exc)
+        else:
+            raise
+    except RuntimeError as exc:
+        if allow_measurement_fallback:
+            code_size_fallback_reason = str(exc)
+        else:
+            raise
+
+    binary_path: Optional[Path] = None
+    if not emit_c_only and not is_library:
+        binary_name = "app.exe" if sys.platform == "win32" else "app"
+        binary_path = output_path / binary_name
+        gcc_cmd = ["gcc", "-std=c99", "-o", to_native_tool_path(binary_path)]
+        gcc_cmd.extend(to_native_tool_path(f) for f in object_files)
+        print("Compiling with gcc...")
+
+        try:
+            result = subprocess.run(gcc_cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                details = (result.stderr or result.stdout or "").strip()
+                raise RuntimeError(details or "gcc compilation failed")
+        except FileNotFoundError:
+            raise FileNotFoundError("gcc not found. Please install gcc and ensure it's in PATH.")
+
+        print(f"Built executable: {to_native_tool_path(binary_path)}")
+
+    return BackendEmissionResult(
+        backend=backend,
+        status="ok",
+        artifact_dir=output_path,
+        exact_code_size=exact_code_size,
+        binary_path=binary_path,
+        fallback_reason=code_size_fallback_reason,
+        message=f"generated backend '{backend}' artifacts in {to_native_tool_path(output_path)}",
+    )
+
+
+def print_backend_comparison(
+    *,
+    compare_backends: Sequence[str],
+    backend_results: List[BackendEmissionResult],
+    runtime_memory_size: int,
+    estimated_code_size: int,
+    total_stack: int,
+    total_heap: int,
+    total_storage_bytes: int,
+    total_storage_objects: int,
+    total_task_stack: int,
+):
+    print("\n" + "=" * 70)
+    print("BACKEND COMPARISON")
+    print("=" * 70)
+    print(f"Requested:      {', '.join(compare_backends)}")
+    print(f"Stack (max):    {total_stack:8d} bytes")
+    print(f"Heap (total):   {total_heap:8d} bytes")
+    print(f"Task stack:     {total_task_stack:8d} bytes")
+    print(f"Storage use:    {total_storage_bytes:8d} bytes / {total_storage_objects} objects")
+    print(f"Code estimate:  {estimated_code_size:8d} bytes")
+    print(f"Runtime total:  {runtime_memory_size:8d} bytes")
+    print("-" * 70)
+    for result in backend_results:
+        if result.status == "ok":
+            code_text = (
+                f"{result.exact_code_size} bytes"
+                if result.exact_code_size is not None
+                else "unmeasured"
+            )
+            print(
+                f"backend {result.backend}: ok  "
+                f"artifact_dir={to_native_tool_path(result.artifact_dir)}  "
+                f"code={code_text}"
+            )
+            if result.fallback_reason:
+                print(f"  note: {result.fallback_reason}")
+        else:
+            print(f"backend {result.backend}: {result.status}  {result.message}")
+    print("=" * 70)
 
 
 def validate_main_function(modules: Dict[str, Module], is_library_build: bool = False) -> Optional[str]:
@@ -194,10 +367,40 @@ def validate_main_function(modules: Dict[str, Module], is_library_build: bool = 
     return None
 
 
+def select_bir_entry(modules: Dict[str, Module], is_library_build: bool = False) -> tuple[str, str]:
+    """
+    Select an explicit BIR entry symbol for the compilation unit.
+
+    Programs prefer `main()`. Library builds fall back to the first public
+    function, then the first non-extern function if no public symbol exists.
+    """
+    if not is_library_build:
+        for module_name, module in modules.items():
+            for decl in module.declarations:
+                if isinstance(decl, FunctionDecl) and not decl.is_extern and decl.name == "main":
+                    return module_name, decl.name
+
+    for module_name, module in modules.items():
+        for decl in module.declarations:
+            if not isinstance(decl, FunctionDecl) or decl.is_extern:
+                continue
+            if decl.visibility == "public":
+                return module_name, decl.name
+
+    for module_name, module in modules.items():
+        for decl in module.declarations:
+            if isinstance(decl, FunctionDecl) and not decl.is_extern:
+                return module_name, decl.name
+
+    raise ValueError("no function body available for BIR entry selection")
+
+
 def compile_basis(input_files: List[str], 
                   output_dir: str,
                   emit_c_only: bool,
                   run_after: bool,
+                  backend: str = "c",
+                  compare_backends: Optional[Sequence[str]] = None,
                   target_config: Optional[TargetConfig] = None,
                   show_resources: bool = False,
                   is_library: bool = False,
@@ -207,6 +410,22 @@ def compile_basis(input_files: List[str],
     Returns exit code (0 = success, non-zero = failure).
     """
     print(f"[COMPILE] Starting compilation of {input_files}")
+
+    compare_backends = list(compare_backends or [])
+    if backend not in SUPPORTED_BACKENDS:
+        print(
+            f"error: unsupported backend '{backend}'. Supported backends: {', '.join(SUPPORTED_BACKENDS)}",
+            file=sys.stderr,
+        )
+        return 1
+    if compare_backends and backend not in compare_backends:
+        compare_backends.insert(0, backend)
+    if compare_backends and run_after:
+        print("error: --run cannot be used with --compare-backends", file=sys.stderr)
+        return 1
+    if run_after and backend != "c":
+        print(f"error: --run is only supported with --backend=c (requested '{backend}')", file=sys.stderr)
+        return 1
     
     # Initialize diagnostics
     diag = DiagnosticEngine()
@@ -271,6 +490,7 @@ def compile_basis(input_files: List[str],
     
     # Storage for pipeline stages
     modules = {}
+    module_paths: Dict[str, str] = {}
     module_scopes = {}
     processed_modules = set()  # Track which modules we've already processed
     
@@ -310,6 +530,7 @@ def compile_basis(input_files: List[str],
                     return False
                 
                 modules[module_name] = parsed_module
+                module_paths[module_name] = str(module_file)
                 processed_modules.add(module_name)
                 registry.register_known_module(module_name)
                 
@@ -360,6 +581,7 @@ def compile_basis(input_files: List[str],
             return 1
         
         modules[module_name] = module
+        module_paths[module_name] = str(source_file)
         processed_modules.add(module_name)
         registry.register_known_module(module_name)
         
@@ -596,88 +818,122 @@ def compile_basis(input_files: List[str],
     # ========================================================================
     # STAGE 8: Code Generation
     # ========================================================================
-    
-    # In library mode, export all functions for C linkage
-    codegen = ModuleCodeGenerator(diag, export_all=is_library)
-    for module in modules.values():
-        codegen.add_module(module)
-    
-    success = codegen.generate_all(output_path)
-    
-    if not success or diag.has_errors():
-        diag.print_all()
-        return 1
-    
-    print(f"Generated C code in {to_native_tool_path(output_path)}")
-    
-    c_files = sorted(output_path.glob("*.c"))
-    if not c_files:
-        print("error: no C files generated", file=sys.stderr)
-        return 1
-
-    object_files: List[Path] = []
-    exact_code_size = None
-    code_size_fallback_reason = None
-    allow_measurement_fallback = emit_c_only or is_library
 
     try:
-        object_files = compile_objects(c_files, output_path)
-        exact_code_size = measure_object_code_size(object_files)
-    except FileNotFoundError as exc:
-        if allow_measurement_fallback:
-            code_size_fallback_reason = str(exc)
-        else:
-            print("error: gcc/binutils not found. Please install gcc and ensure gcc and size are in PATH.",
-                  file=sys.stderr)
+        entry_module, entry_function = select_bir_entry(modules, is_library_build=is_library)
+        bir_program = lower_validated_program(
+            LoweringInput(
+                program_name=source_files[0].stem if source_files else "basis_program",
+                target=(target_config.target.name if target_config else "host"),
+                profile="strict" if any(module.directives.get("strict") for module in modules.values()) else "relaxed",
+                entry_module=entry_module,
+                entry_function=entry_function,
+                modules=modules,
+                module_paths=module_paths,
+                type_checkers=type_checkers,
+                const_evaluators=const_evaluators,
+                loop_analyzers=loop_analyzers,
+                program_resources=program_resources,
+                module_order=processing_order,
+            )
+        )
+    except (BirLoweringError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if diag.has_errors():
+        diag.print_all()
+        return 1
+
+    backend_results: List[BackendEmissionResult] = []
+    primary_backend_result: Optional[BackendEmissionResult] = None
+
+    if compare_backends:
+        for backend_name in compare_backends:
+            artifact_dir = output_path / backend_name
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                result = emit_backend(
+                    backend=backend_name,
+                    bir_program=bir_program,
+                    diag=diag,
+                    output_path=artifact_dir,
+                    export_all=is_library,
+                    emit_c_only=emit_c_only,
+                    is_library=is_library,
+                )
+            except (BirCBackendError, BasisMlirBackendError, RuntimeError, FileNotFoundError, ValueError) as exc:
+                result = BackendEmissionResult(
+                    backend=backend_name,
+                    status="unavailable" if backend_name == "llvm" else "error",
+                    artifact_dir=artifact_dir,
+                    message=str(exc),
+                )
+            backend_results.append(result)
+            if backend_name == backend:
+                primary_backend_result = result
+        print_backend_comparison(
+            compare_backends=compare_backends,
+            backend_results=backend_results,
+            runtime_memory_size=runtime_memory_size,
+            estimated_code_size=estimated_code_size,
+            total_stack=total_stack,
+            total_heap=total_heap,
+            total_storage_bytes=total_storage_bytes,
+            total_storage_objects=total_storage_objects,
+            total_task_stack=total_task_stack,
+        )
+        if primary_backend_result is None or primary_backend_result.status != "ok":
             return 1
-    except RuntimeError as exc:
-        if allow_measurement_fallback:
-            code_size_fallback_reason = str(exc)
-        else:
-            print("error: object compilation failed", file=sys.stderr)
+    else:
+        try:
+            primary_backend_result = emit_backend(
+                backend=backend,
+                bir_program=bir_program,
+                diag=diag,
+                output_path=output_path,
+                export_all=is_library,
+                emit_c_only=emit_c_only,
+                is_library=is_library,
+            )
+        except FileNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        except RuntimeError as exc:
+            if "gcc compilation failed" in str(exc):
+                print("error: gcc compilation failed", file=sys.stderr)
+            else:
+                print("error: object compilation failed", file=sys.stderr)
             print(str(exc), file=sys.stderr)
             return 1
+        except (BirCBackendError, BasisMlirBackendError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
 
-    binary_path: Optional[Path] = None
-    if not emit_c_only and not is_library:
-        # ====================================================================
-        # GCC Linking
-        # ====================================================================
-        
-        # Determine binary name
-        binary_name = "app.exe" if sys.platform == "win32" else "app"
-        binary_path = output_path / binary_name
-        
-        # Build gcc command
-        gcc_cmd = ["gcc", "-std=c99", "-o", to_native_tool_path(binary_path)]
-        gcc_cmd.extend(to_native_tool_path(f) for f in object_files)
-        
-        print(f"Compiling with gcc...")
-        
-        try:
-            result = subprocess.run(gcc_cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                print("error: gcc compilation failed", file=sys.stderr)
-                if result.stderr:
-                    print(result.stderr, file=sys.stderr)
-                if result.stdout:
-                    print(result.stdout, file=sys.stderr)
-                return 1
-        except FileNotFoundError:
-            print("error: gcc not found. Please install gcc and ensure it's in PATH.", 
-                  file=sys.stderr)
-            return 1
-        except Exception as e:
-            print(f"error: failed to invoke gcc: {e}", file=sys.stderr)
-            return 1
-        
-        print(f"Built executable: {to_native_tool_path(binary_path)}")
+        if backend == "c":
+            print(f"Generated C code in {to_native_tool_path(output_path)}")
+        elif backend == "mlir":
+            print(f"Generated MLIR artifacts in {to_native_tool_path(output_path)}")
+
+    if diag.has_errors():
+        diag.print_all()
+        return 1
+
+    exact_code_size = primary_backend_result.exact_code_size if primary_backend_result else None
+    code_size_fallback_reason = primary_backend_result.fallback_reason if primary_backend_result else None
+    binary_path = primary_backend_result.binary_path if primary_backend_result else None
 
     code_size_info = build_code_size_info(
         estimated_code_size,
         exact_code_size,
-        emit_c_only=emit_c_only,
+        emit_c_only=(emit_c_only or backend != "c"),
         is_library=is_library,
+        artifact_only_reason=(
+            "Code size is estimated only because the MLIR backend currently emits textual IR artifacts; "
+            "code bytes are not enforced in #[max_memory] or flash budgets."
+            if backend == "mlir"
+            else None
+        ),
         fallback_reason=code_size_fallback_reason,
     )
     total_program_size = runtime_memory_size + (code_size_info.exact_bytes or 0)
@@ -861,7 +1117,7 @@ def compile_basis(input_files: List[str],
         print(f"  Heap:  {total_heap}B")
         print(f"  Code:  not validated (target artifact size unavailable)")
 
-    if emit_c_only or is_library:
+    if emit_c_only or is_library or backend != "c":
         return 0
     
     # ========================================================================
@@ -913,7 +1169,20 @@ def main():
     parser.add_argument(
         '--emit-c',
         action='store_true',
-        help='Only generate C code, do not compile with gcc'
+        help='Skip native gcc linking after C emission; IR backends emit artifacts only'
+    )
+
+    parser.add_argument(
+        '--backend',
+        choices=SUPPORTED_BACKENDS,
+        default='c',
+        help='Backend to emit (default: c)'
+    )
+
+    parser.add_argument(
+        '--compare-backends',
+        metavar='LIST',
+        help='Comma-separated backend list to compare from the same validated input (example: c,mlir,llvm)'
     )
     
     parser.add_argument(
@@ -962,6 +1231,12 @@ def main():
         print("error: no input files specified", file=sys.stderr)
         parser.print_help(file=sys.stderr)
         return 1
+
+    try:
+        compare_backends = parse_backend_list(args.compare_backends)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     
     # Load target configuration
     target_config = None
@@ -992,14 +1267,16 @@ def main():
     # Run compilation pipeline
     try:
         exit_code = compile_basis(
-            args.files,
-            args.output,
-            args.emit_c,
-            args.run,
-            target_config,
-            args.show_resources,
-            args.lib,
-            stdlib_path=None  # Use default stdlib discovery
+            input_files=args.files,
+            output_dir=args.output,
+            emit_c_only=args.emit_c,
+            run_after=args.run,
+            backend=args.backend,
+            compare_backends=compare_backends,
+            target_config=target_config,
+            show_resources=args.show_resources,
+            is_library=args.lib,
+            stdlib_path=None,  # Use default stdlib discovery
         )
         return exit_code
     except KeyboardInterrupt:

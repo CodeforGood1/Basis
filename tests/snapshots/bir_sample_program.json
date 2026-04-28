@@ -25,6 +25,7 @@
           "is_wildcard": false
         }
       ],
+      "structs": [],
       "exports": [
         {
           "module": "sample",
@@ -39,7 +40,9 @@
             "kind": "u32",
             "elem": null,
             "len": null,
-            "fields": []
+            "fields": [],
+            "name": null,
+            "volatile": false
           },
           "initializer": "0"
         }
@@ -53,13 +56,17 @@
             "kind": "i32",
             "elem": null,
             "len": null,
-            "fields": []
+            "fields": [],
+            "name": null,
+            "volatile": false
           },
           "attrs": {
             "recursion_max": null,
             "interrupt": false,
             "task_stack": null,
             "task_priority": null,
+            "inline_hint": false,
+            "region_name": null,
             "deterministic": true,
             "blocking": false,
             "allocates_max": null,
@@ -103,7 +110,9 @@
                     "kind": "void",
                     "elem": null,
                     "len": null,
-                    "fields": []
+                    "fields": [],
+                    "name": null,
+                    "volatile": false
                   },
                   "metadata": {
                     "source_loc": {
@@ -146,7 +155,9 @@
                 "kind": "i32",
                 "elem": null,
                 "len": null,
-                "fields": []
+                "fields": [],
+                "name": null,
+                "volatile": false
               }
             }
           ],
@@ -154,7 +165,9 @@
             "kind": "void",
             "elem": null,
             "len": null,
-            "fields": []
+            "fields": [],
+            "name": null,
+            "volatile": false
           },
           "abi": "c",
           "symbol_name": "print_i32",
@@ -163,6 +176,8 @@
             "interrupt": false,
             "task_stack": null,
             "task_priority": null,
+            "inline_hint": false,
+            "region_name": null,
             "deterministic": true,
             "blocking": true,
             "allocates_max": null,

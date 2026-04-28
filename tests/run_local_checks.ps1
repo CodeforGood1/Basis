@@ -47,6 +47,8 @@ function Invoke-BasisCheck {
 }
 
 & python -m py_compile `
+    backend_mlir\__init__.py `
+    backend_mlir\emitter.py `
     bir\__init__.py `
     bir\lower.py `
     bir\model.py `
@@ -59,9 +61,23 @@ function Invoke-BasisCheck {
     compiler\resource_analysis.py `
     compiler\codegen.py `
     compiler\module_codegen.py `
+    mlir_conversions\__init__.py `
+    mlir_conversions\bir_to_basis.py `
+    mlir_conversions\verify.py `
+    mlir_dialects\__init__.py `
+    mlir_dialects\basis.py `
+    mlir_dialects\control.py `
+    mlir_dialects\extern.py `
+    mlir_dialects\isr.py `
+    mlir_dialects\mem.py `
+    mlir_dialects\resource.py `
     tests\semantic_regression_checks.py `
     tests\bir_regression_checks.py `
-    tests\bir_lowering_regression_checks.py
+    tests\bir_lowering_regression_checks.py `
+    tests\backend_c_regression_checks.py `
+    tests\backend_mlir_regression_checks.py `
+    tests\backend_selection_regression_checks.py `
+    tests\pipeline_support.py
 
 if ($LASTEXITCODE -ne 0) {
     throw "python -m py_compile failed"
@@ -80,6 +96,21 @@ if ($LASTEXITCODE -ne 0) {
 & python tests\bir_lowering_regression_checks.py
 if ($LASTEXITCODE -ne 0) {
     throw "BIR lowering regression checks failed"
+}
+
+& python tests\backend_c_regression_checks.py
+if ($LASTEXITCODE -ne 0) {
+    throw "C backend regression checks failed"
+}
+
+& python tests\backend_mlir_regression_checks.py
+if ($LASTEXITCODE -ne 0) {
+    throw "MLIR backend regression checks failed"
+}
+
+& python tests\backend_selection_regression_checks.py
+if ($LASTEXITCODE -ne 0) {
+    throw "Backend selection regression checks failed"
 }
 
 $hostExamples = @(

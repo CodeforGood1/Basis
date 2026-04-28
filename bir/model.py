@@ -57,6 +57,15 @@ class Type:
     elem: Optional["Type"] = None
     len: Optional[int] = None
     fields: List[Field] = field(default_factory=list)
+    name: Optional[str] = None
+    volatile: bool = False
+
+
+@dataclass(frozen=True)
+class StructDef:
+    name: str
+    visibility: str
+    fields: List[Field]
 
 
 @dataclass(frozen=True)
@@ -107,6 +116,8 @@ class FunctionAttrs:
     interrupt: bool = False
     task_stack: Optional[int] = None
     task_priority: Optional[int] = None
+    inline_hint: bool = False
+    region_name: Optional[str] = None
     deterministic: Optional[bool] = None
     blocking: bool = False
     allocates_max: Optional[int] = None
@@ -189,6 +200,7 @@ class Module:
     source_path: str
     attrs: ModuleAttrs
     imports: List[Import] = field(default_factory=list)
+    structs: List[StructDef] = field(default_factory=list)
     exports: List[SymbolRef] = field(default_factory=list)
     globals: List[Global] = field(default_factory=list)
     functions: List[Function] = field(default_factory=list)

@@ -17,6 +17,7 @@ Unsupported today:
 - complex address-of forms that do not map to an addressable storage slot or pointer
 """
 
+import base64
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -50,6 +51,7 @@ from ast_defs import (
     ReturnStmt,
     SourceSpan,
     Statement,
+    StructDecl,
     StructLiteralExpr,
     Type as AstType,
     UnaryExpr,
@@ -74,6 +76,7 @@ from bir.model import (
     Param,
     Program,
     SourceLoc,
+    StructDef,
     SymbolRef,
     Terminator,
     Type,
@@ -136,8 +139,10 @@ def _lower_resolved_type(type_node: BasisType) -> Type:
         return Type(kind="bool")
     if isinstance(type_node, VoidType):
         return Type(kind="void")
-    if isinstance(type_node, (ResolvedPointerType, VolatilePointerType)):
+    if isinstance(type_node, ResolvedPointerType):
         return Type(kind="ptr", elem=_lower_resolved_type(type_node.pointee))
+    if isinstance(type_node, VolatilePointerType):
+        return Type(kind="ptr", elem=_lower_resolved_type(type_node.pointee), volatile=True)
     if isinstance(type_node, ResolvedArrayType):
         if type_node.size is None:
             raise BirLoweringError("BIR lowering requires concrete array sizes")
@@ -151,6 +156,7 @@ def _lower_resolved_type(type_node: BasisType) -> Type:
 
         return Type(
             kind="struct",
+            name=type_node.name,
             fields=[
                 Field(name=field_name, type=_lower_resolved_type(field_type))
                 for field_name, field_type in type_node.fields.items()
@@ -182,6 +188,10 @@ class BirLowerer:
         self.input = input_data
         self.function_resources = self.input.program_resources.get_all_resources()
         self.module_contexts = self._build_module_contexts()
+        self.struct_type_index: Dict[str, StructType] = {}
+        for type_checker in self.input.type_checkers.values():
+            for struct_name, struct_type in type_checker.struct_types.items():
+                self.struct_type_index.setdefault(struct_name, struct_type)
 
     def lower_program(self) -> Program:
         modules = [self._lower_module(context) for context in self.module_contexts]
@@ -237,6 +247,7 @@ class BirLowerer:
 
     def _lower_module(self, context: ModuleLoweringContext) -> Module:
         imports: List[Import] = []
+        structs: List[StructDef] = []
         globals_list: List[Global] = []
         functions: List[Function] = []
         externs: List[Extern] = []
@@ -256,6 +267,10 @@ class BirLowerer:
                         is_wildcard=decl.is_wildcard,
                     )
                 )
+            elif isinstance(decl, StructDecl):
+                structs.append(self._lower_struct(decl, context.type_checker))
+                if decl.visibility == "public":
+                    exports.append(SymbolRef(context.name, decl.name))
             elif isinstance(decl, ConstDecl):
                 globals_list.append(self._lower_const(decl, context))
                 if decl.visibility == "public":
@@ -309,11 +324,28 @@ class BirLowerer:
             source_path=context.source_path,
             attrs=attrs,
             imports=imports,
+            structs=structs,
             exports=exports,
             globals=globals_list,
             functions=functions,
             externs=externs,
             resources=resources,
+        )
+
+    def _lower_struct(self, decl: StructDecl, type_checker: TypeChecker) -> StructDef:
+        resolved = type_checker.struct_types.get(decl.name)
+        if resolved is None:
+            raise BirLoweringError(f"missing struct type information for '{decl.name}'")
+
+        from bir.model import Field
+
+        return StructDef(
+            name=decl.name,
+            visibility=decl.visibility or "private",
+            fields=[
+                Field(name=field_name, type=_lower_resolved_type(field_type))
+                for field_name, field_type in resolved.fields.items()
+            ],
         )
 
     def _lower_const(
@@ -354,6 +386,7 @@ class BirLowerer:
             type_checker=context.type_checker,
             const_eval=context.const_eval,
             loop_analyzer=context.loop_analyzer,
+            fallback_struct_types=self.struct_type_index,
         )
 
         return Function(
@@ -412,11 +445,20 @@ class BirLowerer:
         else:
             deterministic_attr = None
 
+        region_name = None
+        region_annotation = self._find_annotation(annotations, "region")
+        if region_annotation is not None and region_annotation.arguments:
+            region_expr = region_annotation.arguments.get("value")
+            if isinstance(region_expr, LiteralExpr) and region_expr.kind == "string":
+                region_name = region_expr.value
+
         return FunctionAttrs(
             recursion_max=recursion_annotation or resource.recursion_depth,
             interrupt=self._has_annotation(annotations, "interrupt"),
             task_stack=task_stack_annotation or (resource.task_stack_bytes if resource.task_stack_bytes > 0 else None),
             task_priority=task_priority_annotation,
+            inline_hint=self._has_annotation(annotations, "inline"),
+            region_name=region_name,
             deterministic=deterministic_attr,
             blocking=self._has_annotation(annotations, "blocking"),
             allocates_max=allocates_annotation,
@@ -439,6 +481,8 @@ class BirLowerer:
 
     def _lower_ast_type(self, type_checker: TypeChecker, type_node: AstType) -> Type:
         resolved = type_checker._resolve_type(type_node)
+        if resolved is None and hasattr(type_node, "name"):
+            resolved = self.struct_type_index.get(type_node.name)
         if resolved is None:
             raise BirLoweringError("type lowering requires a resolved type")
         return _lower_resolved_type(resolved)
@@ -536,6 +580,7 @@ class FunctionBodyLowerer:
         type_checker: TypeChecker,
         const_eval: ConstantEvaluator,
         loop_analyzer: Optional[LoopAnalyzer],
+        fallback_struct_types: Optional[Dict[str, StructType]] = None,
     ):
         self.module_name = module_name
         self.source_path = source_path
@@ -543,6 +588,7 @@ class FunctionBodyLowerer:
         self.type_checker = type_checker
         self.const_eval = const_eval
         self.loop_analyzer = loop_analyzer
+        self.fallback_struct_types = fallback_struct_types or {}
         self.blocks: List[PendingBlock] = []
         self.current_block: Optional[PendingBlock] = None
         self.scope_stack: List[Dict[str, SlotBinding]] = []
@@ -576,22 +622,19 @@ class FunctionBodyLowerer:
 
     def _lower_statement(self, stmt: Statement):
         if isinstance(stmt, LetDecl):
-            if stmt.initializer is None:
-                raise BirLoweringError(
-                    f"function '{self.module_name}::{self.function_decl.name}' cannot lower uninitialized let declarations yet"
-                )
             slot_type = self._resolve_ast_type(stmt.type)
             binding = self._declare_slot(stmt.name, slot_type)
-            value_ref, value_type = self._lower_expression(stmt.initializer)
-            self._emit_instruction(
-                kind="store",
-                opcode="let",
-                result=None,
-                operands=[binding.slot, value_ref],
-                type=value_type,
-                span=stmt.span,
-                resource_note="let binding",
-            )
+            if stmt.initializer is not None:
+                value_ref, value_type = self._lower_expression(stmt.initializer)
+                self._emit_instruction(
+                    kind="store",
+                    opcode="let",
+                    result=None,
+                    operands=[binding.slot, value_ref],
+                    type=value_type,
+                    span=stmt.span,
+                    resource_note="let binding",
+                )
             return
 
         if isinstance(stmt, ExprStmt):
@@ -993,6 +1036,31 @@ class FunctionBodyLowerer:
         if expr_type is None:
             if isinstance(expr, LiteralExpr):
                 return self._literal_type(expr)
+            if isinstance(expr, IdentifierExpr):
+                binding = self._lookup_slot(expr.name)
+                if binding is not None:
+                    return binding.type
+                symbol = self.type_checker.module_scope.lookup(expr.name)
+                decl_node = getattr(symbol, "decl_node", None) if symbol is not None else None
+                if decl_node is not None and hasattr(decl_node, "type"):
+                    return self._resolve_ast_type(decl_node.type)
+            if isinstance(expr, CallExpr) and isinstance(expr.callee, IdentifierExpr):
+                symbol = self.type_checker.module_scope.lookup(expr.callee.name)
+                decl_node = getattr(symbol, "decl_node", None) if symbol is not None else None
+                if decl_node is not None and hasattr(decl_node, "return_type"):
+                    return self._resolve_ast_type(decl_node.return_type)
+            if isinstance(expr, AddressOfExpr):
+                return Type(kind="ptr", elem=self._expression_type(expr.operand))
+            if isinstance(expr, DereferenceExpr):
+                operand_type = self._expression_type(expr.operand)
+                if operand_type.kind == "ptr" and operand_type.elem is not None:
+                    return operand_type.elem
+            if isinstance(expr, IndexExpr):
+                base_type = self._expression_type(expr.base)
+                if base_type.kind == "array" and base_type.elem is not None:
+                    return base_type.elem
+                if base_type.kind == "ptr" and base_type.elem is not None:
+                    return base_type.elem
             raise BirLoweringError(
                 f"missing resolved expression type for '{expr.__class__.__name__}' in '{self.module_name}::{self.function_decl.name}'"
             )
@@ -1005,6 +1073,8 @@ class FunctionBodyLowerer:
             return Type(kind="f64")
         if expr.kind == "bool":
             return Type(kind="bool")
+        if expr.kind == "string":
+            return Type(kind="ptr", elem=Type(kind="u8"))
         raise BirLoweringError(
             f"literal kind '{expr.kind}' is not lowered in '{self.module_name}::{self.function_decl.name}'"
         )
@@ -1014,6 +1084,8 @@ class FunctionBodyLowerer:
 
     def _resolve_ast_type(self, type_node: AstType) -> Type:
         resolved = self.type_checker._resolve_type(type_node)
+        if resolved is None and hasattr(type_node, "name"):
+            resolved = self.fallback_struct_types.get(type_node.name)
         if resolved is None:
             raise BirLoweringError(
                 f"function '{self.module_name}::{self.function_decl.name}' contains an unresolved type"
@@ -1095,6 +1167,9 @@ class FunctionBodyLowerer:
         return current_ref, result_type
 
     def _literal_value_ref(self, expr: LiteralExpr) -> ValueRef:
+        if expr.kind == "string":
+            encoded = base64.urlsafe_b64encode(expr.value.encode("utf-8")).decode("ascii").rstrip("=")
+            return ValueRef(f"literal_string_b64_{encoded}")
         safe_value = (
             expr.value.replace("-", "neg_")
             .replace(".", "_")

@@ -1,4 +1,4 @@
-#[max_memory(8kb)]
+#[max_memory(16kb)]
 
 import io::*;
 import ring::*;

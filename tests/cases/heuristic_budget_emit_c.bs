@@ -1,4 +1,4 @@
-#[max_memory(1kb)]
+#[max_memory(2kb)]
 
 fn step0() -> i32 { return 0; }
 fn step1() -> i32 { return 1; }

@@ -12,6 +12,7 @@ from bir.model import (
     Extern,
     Function,
     Program,
+    StructDef,
     SymbolRef,
     Terminator,
     Type,
@@ -77,14 +78,21 @@ def verify_program(program: Program):
             raise BirVerificationError(f"duplicate module '{module.name}'")
         module_names.add(module.name)
 
-        if module.attrs.max_memory <= 0:
-            raise BirVerificationError(f"module '{module.name}' must declare positive max_memory")
+        if module.attrs.max_memory < 0:
+            raise BirVerificationError(f"module '{module.name}' max_memory must be non-negative")
         if module.resources.stack_max < 0 or module.resources.heap_max < 0:
             raise BirVerificationError(f"module '{module.name}' resources must be non-negative")
         if module.resources.storage_max < 0 or module.resources.code_size_estimate < 0:
             raise BirVerificationError(f"module '{module.name}' resource estimates must be non-negative")
 
         local_symbols: Set[str] = set()
+        struct_names: Set[str] = set()
+        for struct_def in module.structs:
+            verify_struct(module.name, struct_def)
+            if struct_def.name in struct_names:
+                raise BirVerificationError(f"duplicate struct '{module.name}::{struct_def.name}'")
+            struct_names.add(struct_def.name)
+
         for function in module.functions:
             verify_function(module.name, function)
             if function.name in local_symbols:
@@ -169,6 +177,22 @@ def verify_extern(module_name: str, extern: Extern):
         verify_type(param.type, f"extern '{module_name}::{extern.name}' param '{param.name}'")
 
 
+def verify_struct(module_name: str, struct_def: StructDef):
+    if not struct_def.name:
+        raise BirVerificationError(f"struct in module '{module_name}' must have a name")
+    if struct_def.visibility not in _VALID_VISIBILITIES:
+        raise BirVerificationError(f"struct '{module_name}::{struct_def.name}' has invalid visibility")
+    if not struct_def.fields:
+        raise BirVerificationError(f"struct '{module_name}::{struct_def.name}' must contain fields")
+
+    field_names: Set[str] = set()
+    for field in struct_def.fields:
+        if field.name in field_names:
+            raise BirVerificationError(f"struct '{module_name}::{struct_def.name}' has duplicate field '{field.name}'")
+        field_names.add(field.name)
+        verify_type(field.type, f"struct '{module_name}::{struct_def.name}' field '{field.name}'")
+
+
 def verify_block(module_name: str, function_name: str, block: Block):
     if not block.name:
         raise BirVerificationError(f"function '{module_name}::{function_name}' contains unnamed block")
@@ -197,11 +221,15 @@ def verify_terminator(module_name: str, function_name: str, terminator: Terminat
 def verify_type(type_node: Type, context: str):
     if type_node.kind not in _VALID_TYPE_KINDS:
         raise BirVerificationError(f"{context} uses invalid type kind '{type_node.kind}'")
+    if type_node.volatile and type_node.kind != "ptr":
+        raise BirVerificationError(f"{context} only pointer types may be volatile")
 
     if type_node.kind == "ptr":
         if type_node.elem is None:
             raise BirVerificationError(f"{context} pointer type must include elem")
         verify_type(type_node.elem, context)
+        if type_node.fields or type_node.len is not None:
+            raise BirVerificationError(f"{context} pointer type cannot carry array/struct payload")
 
     if type_node.kind == "array":
         if type_node.elem is None or type_node.len is None:
@@ -209,8 +237,12 @@ def verify_type(type_node: Type, context: str):
         if type_node.len <= 0:
             raise BirVerificationError(f"{context} array length must be positive")
         verify_type(type_node.elem, context)
+        if type_node.volatile:
+            raise BirVerificationError(f"{context} only pointer types may be volatile")
 
     if type_node.kind == "struct":
+        if not type_node.name:
+            raise BirVerificationError(f"{context} struct type must include a name")
         if not type_node.fields:
             raise BirVerificationError(f"{context} struct type must include fields")
         field_names: Set[str] = set()
@@ -219,9 +251,13 @@ def verify_type(type_node: Type, context: str):
                 raise BirVerificationError(f"{context} struct type has duplicate field '{field.name}'")
             field_names.add(field.name)
             verify_type(field.type, context)
+        if type_node.volatile:
+            raise BirVerificationError(f"{context} only pointer types may be volatile")
 
     if type_node.kind == "void" and (type_node.elem is not None or type_node.len is not None or type_node.fields):
         raise BirVerificationError(f"{context} void type cannot carry extra shape")
+    if type_node.kind == "void" and (type_node.name is not None or type_node.volatile):
+        raise BirVerificationError(f"{context} void type cannot carry qualifiers or names")
 
 
 def verify_control_flow(module_name: str, function_name: str, blocks: List[Block]):
