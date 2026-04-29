@@ -4,10 +4,12 @@
 #[max_memory(4kb)]
 
 // Runtime print functions (provided by BASIS runtime)
+@ffi(lib="demo.platform")
 @deterministic
 @blocking
 @stack(64)
 extern fn print_str(s: *u8) -> void;
+@ffi(lib="demo.platform")
 @deterministic
 @blocking
 @stack(64)

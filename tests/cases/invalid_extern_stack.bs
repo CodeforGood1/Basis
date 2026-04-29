@@ -1,5 +1,6 @@
 #[max_memory(4kb)]
 
+@ffi(lib="basis.test_support")
 @deterministic
 extern fn platform_tick() -> u32;
 

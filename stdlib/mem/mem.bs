@@ -2,9 +2,13 @@
 // Explicit heap allocation utilities
 
 // Extern bindings
+@ffi(lib="basis.mem")
 @deterministic @allocates @stack(64) extern fn malloc(size: u32) -> *u8;
+@ffi(lib="basis.mem")
 @deterministic @stack(64) extern fn free(ptr: *u8) -> void;
+@ffi(lib="basis.mem")
 @deterministic @isr_safe @reentrant @stack(64) extern fn memset(ptr: *u8, value: i32, size: u32) -> *u8;
+@ffi(lib="basis.mem")
 @deterministic @isr_safe @reentrant @stack(64) extern fn memcpy(dest: *u8, src: *u8, size: u32) -> *u8;
 
 // Allocate raw bytes

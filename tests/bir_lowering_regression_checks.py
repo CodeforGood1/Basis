@@ -7,6 +7,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "compiler"))
 
 from diagnostics import DiagnosticEngine
+from target_config import TargetConfig
 from lexer import Lexer
 from parser import Parser
 from sema import ModuleRegistry, SemanticAnalyzer
@@ -14,7 +15,7 @@ from typecheck import TypeChecker
 from consteval import evaluate_constants
 from loop_analysis import analyze_loops
 from resource_analysis import analyze_program_resources
-from bir import render_bir, verify_program
+from bir import ProgramRuntime, render_bir, verify_program
 from bir.lower import LoweringInput, lower_validated_program
 
 
@@ -55,10 +56,25 @@ def build_validated_program(source: str, module_name: str = "sample"):
     return module, type_checker, const_eval, loop_analyzer, program_resources
 
 
+def host_runtime(module_name: str = "sample") -> ProgramRuntime:
+    target = TargetConfig.from_name("host").target
+    return ProgramRuntime(
+        target_id="host",
+        target_triple=target.triple,
+        target_abi=target.abi,
+        startup_model="hosted",
+        entry_symbol="main",
+        internal_entry_symbol=f"basis_entry__{module_name}__main",
+        entry_return="i32",
+        supports_host_run=True,
+    )
+
+
 def assert_partial_lowering_works_for_straight_line_functions():
     source = """#[max_memory(4kb)]
 public const LIMIT: i32 = 3;
 
+@ffi(lib="basis.test_support")
 @deterministic
 @blocking
 @stack(64)
@@ -79,6 +95,7 @@ fn main() -> i32 {
             profile="relaxed",
             entry_module="sample",
             entry_function="main",
+            runtime=host_runtime(),
             modules={"sample": module},
             module_paths={"sample": "tests/cases/sample.bs"},
             type_checkers={"sample": type_checker},
@@ -138,6 +155,7 @@ fn main() -> i32 {
             profile="relaxed",
             entry_module="sample",
             entry_function="main",
+            runtime=host_runtime(),
             modules={"sample": module},
             module_paths={"sample": "tests/cases/sample.bs"},
             type_checkers={"sample": type_checker},
@@ -190,6 +208,7 @@ fn main() -> i32 {
             profile="relaxed",
             entry_module="sample",
             entry_function="main",
+            runtime=host_runtime(),
             modules={"sample": module},
             module_paths={"sample": "tests/cases/sample.bs"},
             type_checkers={"sample": type_checker},

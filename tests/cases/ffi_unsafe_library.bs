@@ -1,0 +1,12 @@
+#[max_memory(1kb)]
+
+@ffi(lib="vendor.legacy_timer")
+@nondeterministic
+@blocking
+@stack(32)
+extern fn wait_forever() -> void;
+
+fn main() -> i32 {
+    wait_forever();
+    return 0;
+}

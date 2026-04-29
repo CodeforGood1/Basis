@@ -167,6 +167,10 @@ class Extern:
     attrs: FunctionAttrs
     effects: FunctionEffects
     resources: FunctionResources
+    library_id: Optional[str] = None
+    trust_level: Optional[str] = None
+    requires_wrappers: bool = False
+    strict_allowed: bool = True
 
 
 @dataclass(frozen=True)
@@ -216,10 +220,24 @@ class Module:
 
 
 @dataclass(frozen=True)
+class ProgramRuntime:
+    target_id: str
+    target_triple: str
+    target_abi: str
+    startup_model: str
+    entry_symbol: Optional[str]
+    internal_entry_symbol: str
+    entry_abi: str = "c"
+    entry_return: str = "i32"
+    supports_host_run: bool = False
+
+
+@dataclass(frozen=True)
 class Program:
     name: str
     target: str
     profile: str
     entry: SymbolRef
+    runtime: ProgramRuntime
     modules: List[Module]
     diagnostics: List[Diagnostic] = field(default_factory=list)

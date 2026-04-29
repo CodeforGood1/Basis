@@ -41,7 +41,8 @@ fn main() -> i32 {
         llvm_ir = (out_dir / "sample_program.ll").read_text(encoding="utf-8")
         lowered_mlir = (out_dir / "sample_program.llvm.mlir").read_text(encoding="utf-8")
 
-        assert 'define external i32 @"sample.main"()' in llvm_ir
+        assert 'define external i32 @"main"()' in llvm_ir
+        assert 'define internal i32 @"basis_entry__sample__main"()' in llvm_ir
         assert 'define internal i32 @"sample.plus_one"(i32 %"x")' in llvm_ir
         assert "add i32" in llvm_ir
         assert "icmp sgt i32" in llvm_ir
@@ -55,6 +56,33 @@ fn main() -> i32 {
         out_dir.rmdir()
 
 
+def assert_backend_emits_esp32_entry_alias():
+    source = """#[max_memory(4kb)]
+fn main() -> void {
+    return;
+}
+"""
+
+    program = build_bir_program(source, target_id="esp32")
+    diag = DiagnosticEngine()
+    backend = BasisLlvmBackend(diag)
+    out_dir = ROOT / "tests" / "_tmp_backend" / f"llvm_esp32_{uuid.uuid4().hex}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        object_path = backend.generate_all(program, out_dir)
+        assert object_path is None, "esp32 LLVM backend should not emit a host object file"
+
+        llvm_ir = (out_dir / "sample_program.ll").read_text(encoding="utf-8")
+        assert 'target triple = "xtensa-esp32-none-elf"' in llvm_ir
+        assert 'define internal void @"basis_entry__sample__main"()' in llvm_ir
+        assert 'define external void @"app_main"()' in llvm_ir
+    finally:
+        for path in sorted(out_dir.glob("*")):
+            path.unlink()
+        out_dir.rmdir()
+
+
 if __name__ == "__main__":
     assert_backend_emits_real_llvm_ir_and_object()
+    assert_backend_emits_esp32_entry_alias()
     print("LLVM backend regression checks passed.")

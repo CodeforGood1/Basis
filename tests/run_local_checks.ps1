@@ -66,6 +66,8 @@ function Invoke-BasisCheck {
     compiler\loop_analysis.py `
     compiler\resource_analysis.py `
     compiler\codegen.py `
+    compiler\ffi_policy.py `
+    compiler\target_pipeline.py `
     compiler\module_codegen.py `
     mlir_conversions\__init__.py `
     mlir_conversions\basis_to_llvm.py `
@@ -89,6 +91,8 @@ function Invoke-BasisCheck {
     tests\backend_llvm_regression_checks.py `
     tests\backend_mlir_regression_checks.py `
     tests\backend_selection_regression_checks.py `
+    tests\backend_equivalence_regression_checks.py `
+    tests\target_pipeline_regression_checks.py `
     tests\pipeline_support.py
 
 if ($LASTEXITCODE -ne 0) {
@@ -128,6 +132,16 @@ if ($LASTEXITCODE -ne 0) {
 & python tests\backend_selection_regression_checks.py
 if ($LASTEXITCODE -ne 0) {
     throw "Backend selection regression checks failed"
+}
+
+& python tests\backend_equivalence_regression_checks.py
+if ($LASTEXITCODE -ne 0) {
+    throw "Backend equivalence regression checks failed"
+}
+
+& python tests\target_pipeline_regression_checks.py
+if ($LASTEXITCODE -ne 0) {
+    throw "Target pipeline regression checks failed"
 }
 
 $hostExamples = @(
@@ -210,6 +224,40 @@ Invoke-BasisCheck `
     -CommandArgs @("build", "tests\cases\invalid_interrupt_heap.bs") `
     -ExpectSuccess $false `
     -RequiredText @("E_INTERRUPT_HEAP")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_ffi_missing_library.bs") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_EXTERN_FFI_LIBRARY_REQUIRED")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_ffi_unverified_library.bs") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_FFI_UNVERIFIED_LIBRARY")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_ffi_unverified_library.bs", "--ffi-policy", "warn", "--emit-c") `
+    -ExpectSuccess $true `
+    -RequiredText @("W_FFI_UNVERIFIED_LIBRARY")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\invalid_ffi_wrapper_required.bs", "--ffi-manifest", "tests\cases\ffi_vendor_manifest.json") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_FFI_WRAPPER_REQUIRED")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\ffi_unsafe_library.bs", "--ffi-manifest", "tests\cases\ffi_vendor_manifest.json") `
+    -ExpectSuccess $false `
+    -RequiredText @("E_FFI_UNSAFE_LIBRARY")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\ffi_unsafe_library.bs", "--ffi-manifest", "tests\cases\ffi_vendor_manifest.json", "--ffi-policy", "warn", "--emit-c") `
+    -ExpectSuccess $true `
+    -RequiredText @("W_FFI_UNSAFE_LIBRARY")
+
+Invoke-BasisCheck `
+    -CommandArgs @("build", "tests\cases\ffi_wrapped_vendor_ok.bs", "--ffi-manifest", "tests\cases\ffi_vendor_manifest.json", "--emit-c") `
+    -ExpectSuccess $true
 
 Invoke-BasisCheck `
     -CommandArgs @("build", "tests\cases\invalid_extern_stack.bs") `

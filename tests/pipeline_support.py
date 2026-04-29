@@ -7,7 +7,9 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "compiler"))
 
 from bir.lower import LoweringInput, lower_validated_program
+from bir.model import ProgramRuntime
 from diagnostics import DiagnosticEngine
+from target_config import TargetConfig
 from lexer import Lexer
 from parser import Parser
 from sema import ModuleRegistry, SemanticAnalyzer
@@ -17,7 +19,7 @@ from loop_analysis import analyze_loops
 from resource_analysis import analyze_program_resources
 
 
-def build_bir_program(source: str, module_name: str = "sample"):
+def build_bir_program(source: str, module_name: str = "sample", target_id: str = "host"):
     diag = DiagnosticEngine()
     registry = ModuleRegistry()
     registry.register_known_module(module_name)
@@ -51,13 +53,24 @@ def build_bir_program(source: str, module_name: str = "sample"):
     )
     assert not diag.has_errors(), "validation pipeline reported unexpected errors"
 
+    target = TargetConfig.from_name(target_id).target
     return lower_validated_program(
         LoweringInput(
             program_name="sample_program",
-            target="host",
+            target=target_id,
             profile="relaxed",
             entry_module=module_name,
             entry_function="main",
+            runtime=ProgramRuntime(
+                target_id=target_id,
+                target_triple=target.triple,
+                target_abi=target.abi,
+                startup_model="hosted" if target_id == "host" else "target_alias",
+                entry_symbol="main" if target_id == "host" else "app_main",
+                internal_entry_symbol=f"basis_entry__{module_name}__main",
+                entry_return="i32" if target_id == "host" else "void",
+                supports_host_run=(target_id == "host"),
+            ),
             modules={module_name: module},
             module_paths={module_name: f"tests/cases/{module_name}.bs"},
             type_checkers={module_name: type_checker},

@@ -16,6 +16,7 @@ from pipeline_support import build_bir_program
 
 def assert_backend_emits_structs_strings_and_cfg():
     source = """#[max_memory(8kb)]
+@ffi(lib="basis.test_support")
 @deterministic
 @blocking
 @stack(64)
@@ -67,9 +68,9 @@ fn main() -> i32 {
 
 def assert_backend_emits_volatile_pointer_types():
     source = """#[max_memory(4kb)]
-fn main() -> u32 {
+fn main() -> i32 {
     let gpio_out: volatile *u32 = 0x3FF44004 as volatile *u32;
-    return *gpio_out;
+    return (*gpio_out) as i32;
 }
 """
 
@@ -96,7 +97,44 @@ fn main() -> u32 {
         out_dir.rmdir()
 
 
+def assert_backend_emits_runtime_entry_wrappers():
+    source = """#[max_memory(4kb)]
+fn main() -> void {
+    return;
+}
+"""
+
+    host_program = build_bir_program(source, target_id="host")
+    esp32_program = build_bir_program(source, target_id="esp32")
+    diag = DiagnosticEngine()
+    backend = BirCBackend(diag)
+    out_dir = ROOT / "tests" / "_tmp_backend" / f"runtime_{uuid.uuid4().hex}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        assert backend.generate_all(host_program, out_dir), "host backend generation failed"
+        host_impl = (out_dir / "sample.c").read_text(encoding="utf-8")
+        assert "void basis_entry__sample__main(void)" in host_impl
+        assert "int main(void)" in host_impl
+        assert "basis_entry__sample__main();" in host_impl
+    finally:
+        for path in sorted(out_dir.glob("*")):
+            path.unlink()
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        assert backend.generate_all(esp32_program, out_dir), "esp32 backend generation failed"
+        esp32_impl = (out_dir / "sample.c").read_text(encoding="utf-8")
+        assert "void basis_entry__sample__main(void)" in esp32_impl
+        assert "void app_main(void)" in esp32_impl
+        assert "basis_entry__sample__main();" in esp32_impl
+    finally:
+        for path in sorted(out_dir.glob("*")):
+            path.unlink()
+        out_dir.rmdir()
+
+
 if __name__ == "__main__":
     assert_backend_emits_structs_strings_and_cfg()
     assert_backend_emits_volatile_pointer_types()
+    assert_backend_emits_runtime_entry_wrappers()
     print("C backend regression checks passed.")

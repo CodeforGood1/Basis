@@ -75,6 +75,7 @@ from bir.model import (
     ModuleResources,
     Param,
     Program,
+    ProgramRuntime,
     SourceLoc,
     StructDef,
     SymbolRef,
@@ -84,6 +85,7 @@ from bir.model import (
 )
 from bir.verify import verify_program
 from consteval import BoolConstant, ConstantEvaluator, FloatConstant, IntConstant
+from ffi_policy import FfiResolvedExtern
 from loop_analysis import LoopAnalyzer
 from resource_analysis import FunctionResource, ProgramResourceAnalyzer
 from typecheck import (
@@ -111,6 +113,7 @@ class LoweringInput:
     profile: str
     entry_module: str
     entry_function: str
+    runtime: ProgramRuntime
     modules: Dict[str, AstModule]
     module_paths: Dict[str, str]
     type_checkers: Dict[str, TypeChecker]
@@ -118,6 +121,7 @@ class LoweringInput:
     program_resources: ProgramResourceAnalyzer
     loop_analyzers: Optional[Dict[str, LoopAnalyzer]] = None
     module_order: Optional[List[str]] = None
+    ffi_bindings: Optional[Dict[str, FfiResolvedExtern]] = None
 
 
 @dataclass(frozen=True)
@@ -202,6 +206,7 @@ class BirLowerer:
             target=self.input.target,
             profile=self.input.profile,
             entry=SymbolRef(self.input.entry_module, self.input.entry_function),
+            runtime=self.input.runtime,
             modules=modules,
             diagnostics=diagnostics,
         )
@@ -409,6 +414,7 @@ class BirLowerer:
         decl: FunctionDecl,
         resource: FunctionResource,
     ) -> Extern:
+        binding = (self.input.ffi_bindings or {}).get(f"{context.name}::{decl.name}")
         return Extern(
             name=decl.name,
             visibility=decl.visibility or "private",
@@ -422,6 +428,10 @@ class BirLowerer:
                 stack_max=resource.stack_bytes,
                 heap_max=resource.heap_bytes,
             ),
+            library_id=(binding.library_id if binding is not None else None),
+            trust_level=(binding.trust if binding is not None else None),
+            requires_wrappers=(binding.requires_wrappers if binding is not None else False),
+            strict_allowed=(binding.strict_allowed if binding is not None else True),
         )
 
     def _lower_param(self, type_checker: TypeChecker, param) -> Param:

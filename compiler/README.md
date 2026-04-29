@@ -28,12 +28,33 @@ fn main() -> i32 {
 python basis.py build hello.bs --run
 ```
 
+### Backend Selection
+```bash
+python basis.py build hello.bs --backend c
+python basis.py build hello.bs --backend llvm --emit-c
+python basis.py build hello.bs --compare-backends c,mlir,llvm --emit-c
+```
+
+- `c` is the stable production backend.
+- `llvm` emits verified LLVM IR and host object files from validated BIR.
+- `mlir` emits structured lowering artifacts and is currently intended for inspection, conversion work, and regression coverage rather than direct production deployment.
+
 ### Library Mode (for linking with C)
 BASIS removes `while` loops entirely, so embedded apps typically use C or a HAL for scheduling:
 ```bash
 python basis.py build --lib sensor.bs motor.bs --emit-c
 # Link generated C files with your C main loop
 ```
+
+### Target Bundle Output
+
+Every successful build emits:
+
+- `basis-target-manifest.json`
+- `basis-build-target.ps1` and `basis-build-target.sh`
+- `basis-flash-target.ps1` and `basis-flash-target.sh` when the target profile defines flashing
+
+The manifest records the selected target triple, ABI, build system, startup object expectations, linker-script expectations, SDK integration mode, and generated artifacts. ESP32 C builds also emit an `esp32_project/` scaffold; bare-metal targets emit `target-support/` scaffolding for linker scripts and startup objects.
 
 ### With Standard Library
 ```basis
@@ -230,6 +251,7 @@ v1.0/
 
 ### Extern Declaration Syntax
 ```
+@ffi(lib="vendor.gpio") @deterministic @isr_safe @stack(N) extern fn IDENTIFIER(param_list?) -> type;
 @deterministic @isr_safe @stack(N) extern fn IDENTIFIER(param_list?) -> type;
 @deterministic @blocking @stack(N) extern fn IDENTIFIER(param_list?) -> type;
 @deterministic @allocates(max=N) @stack(N) extern fn IDENTIFIER(param_list?) -> type;
@@ -242,9 +264,11 @@ param ::= IDENTIFIER ":" type
 - Variadic functions: forbidden.
 - `@stack(N)` is required on every extern so the whole-program call graph stays bounded.
 - Every extern must declare exactly one determinism contract: `@deterministic` or `@nondeterministic`.
+- User-defined externs must declare `@ffi(lib="...")` so the compiler can resolve the owning foreign library against an FFI manifest.
 - `@blocking`, `@allocates(max=N)`, and `@isr_safe` are optional refinements.
 - `@isr_safe` cannot be combined with `@blocking`, `@allocates`, or `@nondeterministic`.
 - Bare `@allocates` is only valid for compiler-known allocator models such as `malloc`; generic foreign allocators must use `@allocates(max=N)`.
+- FFI trust levels are `trusted`, `reviewed`, `unverified`, and `unsafe`. Use `--ffi-policy strict|warn|allow` and optional `--ffi-manifest FILE` to control enforcement.
 
 ### Name Binding Rules
 - Default symbol name = BASIS identifier, case-sensitive, no mangling.
@@ -282,6 +306,10 @@ param ::= IDENTIFIER ":" type
 - `E_EXTERN_BODY`: extern functions must not have bodies.
 - `E_EXTERN_EFFECT_REQUIRED`: extern functions must declare `@deterministic` or `@nondeterministic`.
 - `E_EXTERN_ALLOCATES_BUDGET_REQUIRED`: generic foreign allocators must use `@allocates(max=N)`.
+- `E_EXTERN_FFI_LIBRARY_REQUIRED`: user-defined externs must declare `@ffi(lib="...")`.
+- `E_FFI_UNVERIFIED_LIBRARY`: foreign library is not present in the resolved manifest under strict policy.
+- `E_FFI_UNSAFE_LIBRARY`: foreign library is marked unsafe under the active FFI policy.
+- `E_FFI_WRAPPER_REQUIRED`: foreign library requires private raw externs plus BASIS wrapper functions.
 - `E_EFFECT_CONFLICT`: incompatible effect annotations were combined.
 
 ## PART B — Compiler Responsibilities

@@ -159,6 +159,7 @@ public fn bool_or(a: bool, b: bool) -> bool {
 // Assertions
 // ============================================================================
 
+@ffi(lib="basis.core")
 @deterministic
 @blocking
 @stack(32)

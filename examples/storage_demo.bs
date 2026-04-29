@@ -2,6 +2,7 @@
 #[max_storage(1kb)]
 #[max_storage_objects(8)]
 
+@ffi(lib="demo.platform")
 @deterministic
 @storage(max_bytes=128, max_objects=1)
 @stack(64)

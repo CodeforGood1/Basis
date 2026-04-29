@@ -1,5 +1,6 @@
 #[max_memory(4kb)]
 
+@ffi(lib="basis.test_support")
 @deterministic
 @blocking
 @stack(32)

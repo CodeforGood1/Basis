@@ -5,6 +5,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "compiler"))
 
 from bir import (
     Block,
@@ -23,6 +24,7 @@ from bir import (
     ModuleResources,
     Param,
     Program,
+    ProgramRuntime,
     SourceLoc,
     SymbolRef,
     Terminator,
@@ -31,6 +33,7 @@ from bir import (
     render_bir,
     verify_program,
 )
+from target_config import TargetConfig
 
 
 def scalar(kind: str) -> Type:
@@ -41,6 +44,7 @@ def build_sample_program() -> Program:
     i32 = scalar("i32")
     u32 = scalar("u32")
     void = scalar("void")
+    host_target = TargetConfig.from_name("host").target
     loc = SourceLoc(
         path="tests/cases/sample.bs",
         line=4,
@@ -54,6 +58,16 @@ def build_sample_program() -> Program:
         target="host",
         profile="strict",
         entry=SymbolRef(module="sample", name="main"),
+        runtime=ProgramRuntime(
+            target_id="host",
+            target_triple=host_target.triple,
+            target_abi=host_target.abi,
+            startup_model="hosted",
+            entry_symbol="main",
+            internal_entry_symbol="basis_entry__sample__main",
+            entry_return="i32",
+            supports_host_run=True,
+        ),
         modules=[
             Module(
                 name="sample",
@@ -140,6 +154,10 @@ def build_sample_program() -> Program:
                             isr_safe=False,
                         ),
                         resources=FunctionResources(stack_max=64, heap_max=0),
+                        library_id="basis.io",
+                        trust_level="reviewed",
+                        requires_wrappers=False,
+                        strict_allowed=True,
                     )
                 ],
                 resources=ModuleResources(
@@ -170,11 +188,22 @@ def assert_snapshot_matches():
 
 
 def assert_verifier_rejects_invalid_program():
+    host_target = TargetConfig.from_name("host").target
     bad_program = Program(
         name="bad",
         target="host",
         profile="strict",
         entry=SymbolRef(module="bad", name="main"),
+        runtime=ProgramRuntime(
+            target_id="host",
+            target_triple=host_target.triple,
+            target_abi=host_target.abi,
+            startup_model="hosted",
+            entry_symbol="main",
+            internal_entry_symbol="basis_entry__bad__main",
+            entry_return="i32",
+            supports_host_run=True,
+        ),
         modules=[
             Module(
                 name="bad",

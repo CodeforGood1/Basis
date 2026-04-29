@@ -34,7 +34,7 @@ class LlvmLiteProgramBuilder:
     def __init__(self, program: Program):
         self.program = program
         self.module = ir.Module(name=program.name)
-        self.module.triple = _target_triple(program.target)
+        self.module.triple = _effective_target_triple(program.runtime.target_triple)
         self.struct_types: Dict[str, ir.IdentifiedStructType] = {}
         self.globals: Dict[str, ir.GlobalValue] = {}
         self.functions: Dict[str, ir.Function] = {}
@@ -45,6 +45,7 @@ class LlvmLiteProgramBuilder:
         self._declare_globals()
         self._declare_functions()
         self._define_functions()
+        self._define_runtime_entry_wrapper()
         return self.module
 
     def emit_object(self) -> bytes:
@@ -100,12 +101,16 @@ class LlvmLiteProgramBuilder:
         returns = self._lower_type(function.returns)
         params = [self._lower_type(param.type) for param in function.params]
         function_type = ir.FunctionType(returns, params)
-        name = self._qualified_symbol(module_name, function.name)
+        name = self._implementation_symbol(module_name, function.name)
         function_ir = ir.Function(self.module, function_type, name=name)
-        function_ir.linkage = "internal" if function.visibility == "private" else "external"
+        function_ir.linkage = (
+            "internal"
+            if function.visibility == "private" or self._is_wrapped_entry_function(module_name, function.name)
+            else "external"
+        )
         for arg, param in zip(function_ir.args, function.params):
             arg.name = param.name
-        self.functions[name] = function_ir
+        self.functions[self._qualified_symbol(module_name, function.name)] = function_ir
 
     def _define_functions(self):
         for module in self.program.modules:
@@ -113,6 +118,25 @@ class LlvmLiteProgramBuilder:
                 context = self._create_function_context(module, function)
                 for block in function.blocks:
                     self._emit_block(context, block)
+
+    def _define_runtime_entry_wrapper(self):
+        runtime = self.program.runtime
+        if runtime.entry_symbol is None:
+            return
+        entry_function = self.functions[self._qualified_symbol(self.program.entry.module, self.program.entry.name)]
+        wrapper_return = ir.VoidType() if runtime.entry_return == "void" else ir.IntType(32)
+        wrapper_type = ir.FunctionType(wrapper_return, [])
+        wrapper = ir.Function(self.module, wrapper_type, name=runtime.entry_symbol)
+        wrapper.linkage = "external"
+        builder = ir.IRBuilder(wrapper.append_basic_block("entry"))
+        call_result = builder.call(entry_function, [])
+        if runtime.entry_return == "void":
+            builder.ret_void()
+            return
+        if isinstance(entry_function.function_type.return_type, ir.VoidType):
+            builder.ret(ir.Constant(ir.IntType(32), 0))
+            return
+        builder.ret(call_result)
 
     def _create_function_context(self, module: Module, function: Function) -> FunctionContext:
         ir_function = self.functions[self._qualified_symbol(module.name, function.name)]
@@ -194,6 +218,13 @@ class LlvmLiteProgramBuilder:
             operand = self._resolve_rvalue(context, builder, instruction.operands[0], instruction.type)
             if opcode == "-":
                 return builder.neg(operand, name=instruction.result.name if instruction.result else "")
+            if opcode == "!":
+                zero = ir.Constant(operand.type, 0)
+                if instruction.type.kind == "bool" or isinstance(operand.type, ir.IntType):
+                    return builder.icmp_unsigned("==", operand, zero, name=instruction.result.name if instruction.result else "")
+                if isinstance(operand.type, (ir.FloatType, ir.DoubleType)):
+                    return builder.fcmp_ordered("==", operand, zero, name=instruction.result.name if instruction.result else "")
+                raise LlvmLiteLoweringError("logical not requires an integer, boolean, or floating-point operand")
             if opcode == "~":
                 all_ones = ir.Constant(operand.type, -1)
                 return builder.xor(operand, all_ones, name=instruction.result.name if instruction.result else "")
@@ -260,6 +291,8 @@ class LlvmLiteProgramBuilder:
     def _emit_cast(self, context: FunctionContext, builder: ir.IRBuilder, instruction: Instruction):
         source_ref = instruction.operands[0]
         source_type = context.value_types.get(source_ref.name)
+        if source_type is None and source_ref.name.startswith("literal_"):
+            source_type = _type_for_literal_name(source_ref.name)
         if source_type is None:
             raise LlvmLiteLoweringError(f"missing source type for cast operand '{source_ref.name}'")
         value = self._resolve_rvalue(context, builder, source_ref, source_type)
@@ -425,7 +458,7 @@ class LlvmLiteProgramBuilder:
 
         target_type = self._lower_type(expected_type or _infer_literal_type(literal_kind))
         if isinstance(target_type, ir.IntType):
-            return ir.Constant(target_type, int(value_text))
+            return ir.Constant(target_type, int(value_text, 0))
         if isinstance(target_type, ir.FloatType) or isinstance(target_type, ir.DoubleType):
             return ir.Constant(target_type, float(value_text))
         raise LlvmLiteLoweringError(f"unsupported literal '{literal_name}' for target type '{target_type}'")
@@ -461,7 +494,7 @@ class LlvmLiteProgramBuilder:
         if isinstance(ir_type, ir.IntType):
             if text.lower() in {"true", "false"}:
                 return ir.Constant(ir_type, 1 if text.lower() == "true" else 0)
-            return ir.Constant(ir_type, int(text))
+            return ir.Constant(ir_type, int(text, 0))
         if isinstance(ir_type, ir.FloatType) or isinstance(ir_type, ir.DoubleType):
             return ir.Constant(ir_type, float(text))
         return ir.Constant(ir_type, None)
@@ -518,6 +551,18 @@ class LlvmLiteProgramBuilder:
     def _qualified_symbol(self, module_name: str, name: str) -> str:
         return f"{module_name}.{name}"
 
+    def _implementation_symbol(self, module_name: str, name: str) -> str:
+        if self._is_wrapped_entry_function(module_name, name):
+            return self.program.runtime.internal_entry_symbol
+        return self._qualified_symbol(module_name, name)
+
+    def _is_wrapped_entry_function(self, module_name: str, name: str) -> bool:
+        return (
+            self.program.runtime.entry_symbol is not None
+            and self.program.entry.module == module_name
+            and self.program.entry.name == name
+        )
+
     def _struct_key(self, module_name: str, name: str) -> str:
         return f"{module_name}.{name}"
 
@@ -553,6 +598,13 @@ def _infer_literal_type(kind: str) -> Type:
     raise LlvmLiteLoweringError(f"cannot infer literal type '{kind}'")
 
 
+def _type_for_literal_name(literal_name: str) -> Type:
+    if not literal_name.startswith("literal_"):
+        raise LlvmLiteLoweringError(f"cannot infer non-literal operand type for '{literal_name}'")
+    _, literal_kind, _ = literal_name.split("_", 2)
+    return _infer_literal_type(literal_kind)
+
+
 def _cast_value(builder: ir.IRBuilder, value: ir.Value, source_type: Type, target_type: Type, target_ir):
     source_ir = value.type
     if source_type.kind == target_type.kind:
@@ -583,13 +635,9 @@ def _cast_value(builder: ir.IRBuilder, value: ir.Value, source_type: Type, targe
     raise LlvmLiteLoweringError(f"unsupported cast from '{source_type.kind}' to '{target_type.kind}'")
 
 
-def _target_triple(target_name: str) -> str:
-    if target_name == "host":
+def _effective_target_triple(target_triple: str) -> str:
+    if target_triple == "native":
         llvm.initialize()
         llvm.initialize_native_target()
         return llvm.get_default_triple()
-    triples = {
-        "esp32": "xtensa-esp32-none-elf",
-        "linux": "x86_64-pc-linux-gnu",
-    }
-    return triples.get(target_name, "unknown-unknown-unknown")
+    return target_triple

@@ -26,7 +26,10 @@ from loop_analysis import analyze_loops
 from resource_analysis import analyze_program_resources
 from ast_defs import Module, FunctionDecl, ImportDecl
 from target_config import TargetConfig, PREDEFINED_TARGETS
+from target_pipeline import write_target_bundle
 from bir.lower import BirLoweringError, LoweringInput, lower_validated_program
+from bir.model import ProgramRuntime
+from ffi_policy import FfiPolicyConfig, FfiPolicyError, validate_ffi_bindings
 from backend_c import BirCBackend, BirCBackendError
 from backend_mlir import BasisMlirBackend, BasisMlirBackendError
 from backend_llvm import BasisLlvmBackend, BasisLlvmBackendError
@@ -67,6 +70,7 @@ class BackendEmissionResult:
     artifact_dir: Path
     exact_code_size: Optional[int] = None
     binary_path: Optional[Path] = None
+    manifest_path: Optional[Path] = None
     fallback_reason: Optional[str] = None
     message: Optional[str] = None
 
@@ -275,8 +279,8 @@ def emit_backend(
             raise
 
     binary_path: Optional[Path] = None
-    if not emit_c_only and not is_library:
-        binary_name = "app.exe" if sys.platform == "win32" else "app"
+    if not emit_c_only and not is_library and bir_program.runtime.supports_host_run:
+        binary_name = f"{bir_program.name}.exe" if sys.platform == "win32" else bir_program.name
         binary_path = output_path / binary_name
         gcc_cmd = ["gcc", "-std=c99", "-o", to_native_tool_path(binary_path)]
         gcc_cmd.extend(to_native_tool_path(f) for f in object_files)
@@ -291,6 +295,11 @@ def emit_backend(
             raise FileNotFoundError("gcc not found. Please install gcc and ensure it's in PATH.")
 
         print(f"Built executable: {to_native_tool_path(binary_path)}")
+    elif not emit_c_only and not is_library and not bir_program.runtime.supports_host_run:
+        code_size_fallback_reason = (
+            f"target '{bir_program.runtime.target_id}' uses runtime entry "
+            f"'{bir_program.runtime.entry_symbol}' and does not support host executable linking"
+        )
 
     return BackendEmissionResult(
         backend=backend,
@@ -345,7 +354,48 @@ def print_backend_comparison(
     print("=" * 70)
 
 
-def validate_main_function(modules: Dict[str, Module], is_library_build: bool = False) -> Optional[str]:
+def _declared_return_name(function_decl: FunctionDecl) -> Optional[str]:
+    return_type = getattr(function_decl, "return_type", None)
+    return getattr(return_type, "name", None)
+
+
+def build_program_runtime(
+    *,
+    entry_module: str,
+    entry_function: str,
+    target_config: Optional[TargetConfig],
+    is_library_build: bool,
+) -> ProgramRuntime:
+    target = target_config.target if target_config is not None else PREDEFINED_TARGETS["host"]
+    internal_entry_symbol = f"basis_entry__{entry_module}__{entry_function}"
+    if is_library_build:
+        return ProgramRuntime(
+            target_id=target.key,
+            target_triple=target.triple,
+            target_abi=target.abi,
+            startup_model="library",
+            entry_symbol=None,
+            internal_entry_symbol=internal_entry_symbol,
+            entry_return=target.entry_return,
+            supports_host_run=False,
+        )
+    return ProgramRuntime(
+        target_id=target.key,
+        target_triple=target.triple,
+        target_abi=target.abi,
+        startup_model=target.startup_model,
+        entry_symbol=target.entry_symbol,
+        internal_entry_symbol=internal_entry_symbol,
+        entry_return=target.entry_return,
+        supports_host_run=target.supports_host_run,
+    )
+
+
+def validate_main_function(
+    modules: Dict[str, Module],
+    is_library_build: bool = False,
+    target_config: Optional[TargetConfig] = None,
+) -> Optional[str]:
     """
     Validate main() function requirements.
     
@@ -380,11 +430,22 @@ def validate_main_function(modules: Dict[str, Module], is_library_build: bool = 
     
     # If we have a main(), validate its signature
     if len(main_funcs) == 1:
-        module_name, main_func = main_funcs[0]
+        _, main_func = main_funcs[0]
         
         # main() must not be private (if present, it's the entry point or test harness)
         if main_func.visibility == 'private':
             return "main() cannot be private"
+        return_name = _declared_return_name(main_func)
+        if return_name not in {"i32", "void"}:
+            target_symbol = (
+                target_config.target.entry_symbol
+                if target_config is not None and not is_library_build
+                else "main"
+            )
+            return (
+                f"main() must return i32 or void for runtime entry '{target_symbol}' "
+                f"(found '{return_name or 'unknown'}')"
+            )
     
     return None
 
@@ -426,7 +487,9 @@ def compile_basis(input_files: List[str],
                   target_config: Optional[TargetConfig] = None,
                   show_resources: bool = False,
                   is_library: bool = False,
-                  stdlib_path: Optional[str] = None) -> int:
+                  stdlib_path: Optional[str] = None,
+                  ffi_policy_mode: str = "strict",
+                  ffi_manifest_path: Optional[str] = None) -> int:
     """
     Main compilation pipeline.
     Returns exit code (0 = success, non-zero = failure).
@@ -449,6 +512,8 @@ def compile_basis(input_files: List[str],
         print(f"error: --run is only supported with --backend=c (requested '{backend}')", file=sys.stderr)
         return 1
     
+    effective_target_config = target_config or TargetConfig.from_name("host")
+
     # Initialize diagnostics
     diag = DiagnosticEngine()
     
@@ -706,6 +771,33 @@ def compile_basis(input_files: List[str],
             return 1
         
         const_evaluators[module_name] = const_eval
+
+    # ========================================================================
+    # STAGE 5.5: FFI Trust Policy Validation
+    # ========================================================================
+
+    try:
+        ffi_policy = FfiPolicyConfig(mode=ffi_policy_mode, manifest_path=ffi_manifest_path)
+    except FfiPolicyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        ffi_bindings = validate_ffi_bindings(
+            modules=modules,
+            module_paths=module_paths,
+            stdlib_modules=stdlib_modules,
+            const_evaluators=const_evaluators,
+            diag=diag,
+            policy=ffi_policy,
+        )
+    except FfiPolicyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if diag.has_errors():
+        diag.print_all()
+        return 1
     
     # ========================================================================
     # STAGE 6: Loop Analysis
@@ -832,7 +924,11 @@ def compile_basis(input_files: List[str],
     # Validate main() function
     # ========================================================================
     
-    main_error = validate_main_function(modules, is_library_build=is_library)
+    main_error = validate_main_function(
+        modules,
+        is_library_build=is_library,
+        target_config=target_config,
+    )
     if main_error:
         print(f"error: {main_error}", file=sys.stderr)
         return 1
@@ -843,13 +939,28 @@ def compile_basis(input_files: List[str],
 
     try:
         entry_module, entry_function = select_bir_entry(modules, is_library_build=is_library)
+        runtime = build_program_runtime(
+            entry_module=entry_module,
+            entry_function=entry_function,
+            target_config=effective_target_config,
+            is_library_build=is_library,
+        )
+        if run_after and not runtime.supports_host_run:
+            print(
+                f"error: --run is not supported for target '{runtime.target_id}' "
+                f"because it uses runtime entry '{runtime.entry_symbol}'",
+                file=sys.stderr,
+            )
+            return 1
         bir_program = lower_validated_program(
             LoweringInput(
                 program_name=source_files[0].stem if source_files else "basis_program",
-                target=(target_config.target.name if target_config else "host"),
+                target=runtime.target_id,
                 profile="strict" if any(module.directives.get("strict") for module in modules.values()) else "relaxed",
                 entry_module=entry_module,
                 entry_function=entry_function,
+                runtime=runtime,
+                ffi_bindings=ffi_bindings,
                 modules=modules,
                 module_paths=module_paths,
                 type_checkers=type_checkers,
@@ -882,6 +993,15 @@ def compile_basis(input_files: List[str],
                     output_path=artifact_dir,
                     export_all=is_library,
                     emit_c_only=emit_c_only,
+                    is_library=is_library,
+                )
+                result.manifest_path = write_target_bundle(
+                    output_dir=artifact_dir,
+                    program_name=bir_program.name,
+                    backend=backend_name,
+                    target=effective_target_config.target,
+                    runtime=bir_program.runtime,
+                    binary_path=result.binary_path,
                     is_library=is_library,
                 )
             except (BirCBackendError, BasisMlirBackendError, RuntimeError, FileNotFoundError, ValueError) as exc:
@@ -918,6 +1038,15 @@ def compile_basis(input_files: List[str],
                 emit_c_only=emit_c_only,
                 is_library=is_library,
             )
+            primary_backend_result.manifest_path = write_target_bundle(
+                output_dir=output_path,
+                program_name=bir_program.name,
+                backend=backend,
+                target=effective_target_config.target,
+                runtime=bir_program.runtime,
+                binary_path=primary_backend_result.binary_path,
+                is_library=is_library,
+            )
         except FileNotFoundError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
@@ -938,10 +1067,14 @@ def compile_basis(input_files: List[str],
             print(f"Generated internal MLIR lowering artifacts in {to_native_tool_path(output_path)}")
         elif backend == "llvm":
             print(f"Generated LLVM artifacts in {to_native_tool_path(output_path)}")
+        if primary_backend_result.manifest_path is not None:
+            print(f"Generated target bundle manifest at {to_native_tool_path(primary_backend_result.manifest_path)}")
 
     if diag.has_errors():
         diag.print_all()
         return 1
+    if diag.warning_count > 0:
+        diag.print_all()
 
     exact_code_size = primary_backend_result.exact_code_size if primary_backend_result else None
     code_size_fallback_reason = primary_backend_result.fallback_reason if primary_backend_result else None
@@ -1120,8 +1253,8 @@ def compile_basis(input_files: List[str],
             return 1
         print(f"Task Stack Budget: {total_task_stack}/{max_task_stack_declared} bytes")
 
-    if target_config:
-        validation_error = target_config.validate_resources(
+    if effective_target_config:
+        validation_error = effective_target_config.validate_resources(
             total_stack,
             total_heap,
             code_size=None,
@@ -1129,15 +1262,15 @@ def compile_basis(input_files: List[str],
 
         if validation_error:
             print(f"error: target resource limits exceeded:", file=sys.stderr)
-            print(f"\n{target_config.get_limits_summary()}", file=sys.stderr)
+            print(f"\n{effective_target_config.get_limits_summary()}", file=sys.stderr)
             print(f"\nUsage:", file=sys.stderr)
             print(f"  Stack: {total_stack}B", file=sys.stderr)
             print(f"  Heap:  {total_heap}B", file=sys.stderr)
             print(f"\n{validation_error}", file=sys.stderr)
             return 1
 
-        print(f"\n[OK] Resource validation passed for target: {target_config.target.name}")
-        print(f"  Stack: {total_stack}B / {target_config.target.stack_bytes}B")
+        print(f"\n[OK] Resource validation passed for target: {effective_target_config.target.name}")
+        print(f"  Stack: {total_stack}B / {effective_target_config.target.stack_bytes}B")
         print(f"  Heap:  {total_heap}B")
         print(f"  Code:  not validated (target artifact size unavailable)")
 
@@ -1207,6 +1340,19 @@ def main():
         '--compare-backends',
         metavar='LIST',
         help='Comma-separated backend list to compare from the same validated input (example: c,mlir,llvm)'
+    )
+
+    parser.add_argument(
+        '--ffi-policy',
+        choices=('strict', 'warn', 'allow'),
+        default='strict',
+        help='Foreign-library trust policy for unverified or unsafe extern libraries (default: strict)'
+    )
+
+    parser.add_argument(
+        '--ffi-manifest',
+        metavar='FILE',
+        help='Optional JSON file that defines foreign-library trust levels and wrapper requirements'
     )
     
     parser.add_argument(
@@ -1301,6 +1447,8 @@ def main():
             show_resources=args.show_resources,
             is_library=args.lib,
             stdlib_path=None,  # Use default stdlib discovery
+            ffi_policy_mode=args.ffi_policy,
+            ffi_manifest_path=args.ffi_manifest,
         )
         return exit_code
     except KeyboardInterrupt:

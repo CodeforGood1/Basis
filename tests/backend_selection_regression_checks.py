@@ -20,18 +20,21 @@ def assert_backend_c_explicit_flag_works():
     exit_code, output = run_basis("build", "examples/hello.bs", "--backend", "c", "--emit-c")
     assert exit_code == 0, output
     assert "Generated C code in" in output
+    assert "Generated target bundle manifest at" in output
 
 
 def assert_backend_mlir_explicit_flag_works():
     exit_code, output = run_basis("build", "examples/hello.bs", "--backend", "mlir", "--emit-c")
     assert exit_code == 0, output
     assert "Generated internal MLIR lowering artifacts in" in output
+    assert "Generated target bundle manifest at" in output
 
 
 def assert_backend_llvm_explicit_flag_works():
     exit_code, output = run_basis("build", "examples/hello.bs", "--backend", "llvm", "--emit-c", "-o", "./build-llvm-test")
     assert exit_code == 0, output
     assert "Generated LLVM artifacts in" in output
+    assert "Generated target bundle manifest at" in output
 
 
 def assert_compare_mode_reports_backend_status():

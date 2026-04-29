@@ -1,0 +1,28 @@
+{
+  "libraries": {
+    "basis.core": {
+      "trust": "reviewed",
+      "notes": "BASIS runtime bridge for core process control."
+    },
+    "basis.io": {
+      "trust": "reviewed",
+      "notes": "BASIS standard I/O bridge with explicit blocking contracts."
+    },
+    "basis.mem": {
+      "trust": "reviewed",
+      "notes": "BASIS memory bridge; allocator effects must still be declared per symbol."
+    },
+    "basis.string": {
+      "trust": "reviewed",
+      "notes": "BASIS string bridge to reviewed C string primitives."
+    },
+    "demo.platform": {
+      "trust": "reviewed",
+      "notes": "Demonstration-only platform shims used by examples."
+    },
+    "basis.test_support": {
+      "trust": "reviewed",
+      "notes": "Regression-test helper foreign bindings."
+    }
+  }
+}

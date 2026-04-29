@@ -25,6 +25,9 @@ class BirVerificationError(ValueError):
 
 _VALID_PROFILES = {"strict", "relaxed"}
 _VALID_VISIBILITIES = {"public", "private", "entry"}
+_VALID_STARTUP_MODELS = {"hosted", "target_alias", "library"}
+_VALID_ENTRY_RETURNS = {"i32", "void"}
+_VALID_FFI_TRUST_LEVELS = {"trusted", "reviewed", "unverified", "unsafe"}
 _VALID_INSTRUCTION_KINDS = {
     "assign",
     "call",
@@ -67,6 +70,29 @@ def verify_program(program: Program):
         raise BirVerificationError(f"program.profile must be one of {_VALID_PROFILES}")
     if not program.modules:
         raise BirVerificationError("program must contain at least one module")
+    if not program.runtime.target_id:
+        raise BirVerificationError("program.runtime.target_id must be non-empty")
+    if not program.runtime.target_triple:
+        raise BirVerificationError("program.runtime.target_triple must be non-empty")
+    if not program.runtime.target_abi:
+        raise BirVerificationError("program.runtime.target_abi must be non-empty")
+    if program.runtime.startup_model not in _VALID_STARTUP_MODELS:
+        raise BirVerificationError(
+            f"program.runtime.startup_model must be one of {_VALID_STARTUP_MODELS}"
+        )
+    if not program.runtime.internal_entry_symbol:
+        raise BirVerificationError("program.runtime.internal_entry_symbol must be non-empty")
+    if not program.runtime.entry_abi:
+        raise BirVerificationError("program.runtime.entry_abi must be non-empty")
+    if program.runtime.entry_return not in _VALID_ENTRY_RETURNS:
+        raise BirVerificationError(
+            f"program.runtime.entry_return must be one of {_VALID_ENTRY_RETURNS}"
+        )
+    if program.runtime.startup_model == "library":
+        if program.runtime.entry_symbol is not None:
+            raise BirVerificationError("library programs must not expose a runtime entry symbol")
+    elif not program.runtime.entry_symbol:
+        raise BirVerificationError("non-library programs must expose a runtime entry symbol")
 
     module_names: Set[str] = set()
     function_table: Dict[str, Function] = {}
@@ -172,6 +198,10 @@ def verify_extern(module_name: str, extern: Extern):
         raise BirVerificationError(f"extern '{module_name}::{extern.name}' must declare an ABI")
     if extern.resources.stack_max is None or extern.resources.stack_max <= 0:
         raise BirVerificationError(f"extern '{module_name}::{extern.name}' must carry stack_max metadata")
+    if extern.library_id is not None and not extern.library_id:
+        raise BirVerificationError(f"extern '{module_name}::{extern.name}' library_id must be non-empty when present")
+    if extern.trust_level is not None and extern.trust_level not in _VALID_FFI_TRUST_LEVELS:
+        raise BirVerificationError(f"extern '{module_name}::{extern.name}' has invalid FFI trust '{extern.trust_level}'")
     verify_type(extern.returns, f"extern '{module_name}::{extern.name}' return type")
     for param in extern.params:
         verify_type(param.type, f"extern '{module_name}::{extern.name}' param '{param.name}'")

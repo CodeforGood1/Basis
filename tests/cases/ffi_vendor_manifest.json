@@ -1,0 +1,13 @@
+{
+  "libraries": {
+    "vendor.esp_gpio": {
+      "trust": "reviewed",
+      "requires_wrappers": true,
+      "notes": "Raw ESP32 GPIO entry points must remain private and be wrapped by BASIS helpers."
+    },
+    "vendor.legacy_timer": {
+      "trust": "unsafe",
+      "notes": "Legacy timer API is known to violate BASIS determinism promises."
+    }
+  }
+}

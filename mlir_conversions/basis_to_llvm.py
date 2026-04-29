@@ -193,6 +193,15 @@ def _convert_math_op(
     attrs.pop("opcode", None)
 
     if len(op.operands) == 1:
+        if opcode == "!":
+            attrs["predicate"] = json.dumps("eq")
+            return LlvmMlirOp(
+                "llvm.icmp",
+                operands=[op.operands[0], "0"],
+                result=op.result,
+                result_type="i1",
+                attrs=attrs,
+            )
         unary_map = {
             "-": "llvm.neg",
             "~": "llvm.not",

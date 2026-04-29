@@ -6,6 +6,17 @@
     "module": "sample",
     "name": "main"
   },
+  "runtime": {
+    "target_id": "host",
+    "target_triple": "native",
+    "target_abi": "system",
+    "startup_model": "hosted",
+    "entry_symbol": "main",
+    "internal_entry_symbol": "basis_entry__sample__main",
+    "entry_abi": "c",
+    "entry_return": "i32",
+    "supports_host_run": true
+  },
   "modules": [
     {
       "name": "sample",
@@ -198,7 +209,11 @@
           "resources": {
             "stack_max": 64,
             "heap_max": 0
-          }
+          },
+          "library_id": "basis.io",
+          "trust_level": "reviewed",
+          "requires_wrappers": false,
+          "strict_allowed": true
         }
       ],
       "resources": {

@@ -1,0 +1,13 @@
+#[max_memory(2kb)]
+
+@ffi(lib="vendor.esp_gpio")
+@deterministic
+@isr_safe
+@reentrant
+@stack(32)
+public extern fn gpio_set_level(pin: u32, level: u32) -> void;
+
+fn main() -> i32 {
+    gpio_set_level(2 as u32, 1 as u32);
+    return 0;
+}

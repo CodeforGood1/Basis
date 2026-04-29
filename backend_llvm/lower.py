@@ -275,5 +275,11 @@ def _target_triple_for(target_name: str) -> str:
         "host": "unknown-unknown-unknown",
         "esp32": "xtensa-esp32-none-elf",
         "linux": "x86_64-pc-linux-gnu",
+        "embedded_linux": "x86_64-pc-linux-gnu",
+        "stm32": "thumbv7em-none-eabi",
+        "stm32f103": "thumbv7m-none-eabi",
+        "stm32f407": "thumbv7em-none-eabi",
+        "rp2040": "thumbv6m-none-eabi",
+        "raspberry_pi_pico": "thumbv6m-none-eabi",
     }
     return triples.get(target_name, "unknown-unknown-unknown")

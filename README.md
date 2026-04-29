@@ -4,7 +4,7 @@
 
 BASIS is designed for firmware and embedded logic that must stay bounded, predictable, and easier to reason about as systems grow. It focuses on classes of problems that often remain hidden until integration or long running field use, such as unclear stack growth, hidden heap usage, unsafe interrupt paths, and foreign calls whose behavior is not explicit.
 
-Today BASIS compiles to C so it can fit into existing toolchains and firmware stacks. Its goal is to provide a constrained programming model where important properties of embedded code can be checked earlier, reported clearly, and integrated into existing C based projects without requiring a completely separate runtime ecosystem.
+Today BASIS validates programs through its own frontend and lowers them through a shared internal BIR layer. It has a stable C backend, a real LLVM backend that emits verified `.ll` plus host object files, and an MLIR path that currently serves as a structured lowering artifact rather than a standalone production toolchain backend. The goal is to provide a constrained programming model where important properties of embedded code can be checked earlier, reported clearly, and integrated into existing C-based projects without requiring a completely separate runtime ecosystem.
 
 If you are new to the project, start with [LEARN.md](LEARN.md) for a guided introduction before moving to the full reference documentation.
 
@@ -46,6 +46,8 @@ fn main() -> i32 {
 - fixed-size checksum and byte queue libraries
 - explicit foreign-function effect contracts
 - C code generation for host and embedded integration
+- LLVM IR emission through validated BIR lowering
+- generated target build/flash bundles for embedded targets
 
 ## Implemented Capabilities
 
@@ -64,6 +66,31 @@ BASIS currently provides the following language and compiler capabilities:
 - volatile MMIO helpers in `stdlib/mmio`
 - register, checksum, and fixed queue helpers in `stdlib/bits`, `stdlib/crc`, and `stdlib/ring`
 - local examples, negative tests, and a release packaging flow for Windows
+
+## Backend Status
+
+- `--backend=c`: stable production backend and default path
+- `--backend=llvm`: real LLVM IR plus host object emission; target bundles include toolchain wrappers for host and embedded targets
+- `--backend=mlir`: structured lowering/debug artifact path; not a standalone production backend yet
+
+## Target Bundles
+
+Every successful build now emits a `basis-target-manifest.json` alongside wrapper scripts such as:
+
+- `basis-build-target.ps1`
+- `basis-build-target.sh`
+- `basis-flash-target.ps1`
+- `basis-flash-target.sh`
+
+These files describe the target triple, ABI, build system, expected startup objects, linker-script requirements, and flash command for the selected target. Current built-in target profiles include:
+
+- `host`
+- `embedded_linux`
+- `esp32`
+- `stm32`
+- `rp2040`
+
+For ESP32 C builds, BASIS also generates an ESP-IDF project scaffold under `esp32_project/`. For bare-metal targets such as STM32 and RP2040, BASIS generates `target-support/` scaffolding for linker scripts and startup objects that must be completed with board-specific inputs before building a final image.
 
 BASIS is an embedded systems language under active development, with a working compiler, a static analysis pipeline, a growing standard library, and verified source and packaged workflows.
 
@@ -106,6 +133,12 @@ python compiler/basis.py build examples/hello.bs --run
 
 ```bash
 python compiler/basis.py build examples/hello.bs --emit-c
+```
+
+### Emit LLVM IR
+
+```bash
+python compiler/basis.py build examples/hello.bs --backend llvm --emit-c
 ```
 
 ### Show Resource Analysis
@@ -180,7 +213,7 @@ python compiler/basis.py build --lib control.bs --emit-c --target esp32
 
 Then compile the generated C with your existing firmware stack, HAL, or SDK.
 
-For embedded workflows, the generated C is intended to be built by your existing platform toolchain. In practice, BASIS can be used to compile analyzable application logic into C and then linked into an ESP IDF, STM32 HAL, RP2040 SDK, or other C based firmware project once the surrounding platform code is provided.
+For embedded workflows, BASIS now also emits target build bundles so the selected backend output can be driven through the target toolchain with generated wrapper scripts and a machine-readable manifest. In practice, BASIS can be used to compile analyzable application logic into C or LLVM IR and then hand it to an ESP-IDF, STM32, RP2040, or embedded-Linux toolchain while keeping the language frontend as the semantic source of truth.
 
 ## Key Features
 

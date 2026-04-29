@@ -181,7 +181,7 @@ class BirCBackend:
 
         for function in module.functions:
             if self._should_export(function.visibility):
-                lines.append(self._emit_function_decl(function))
+                lines.append(self._emit_function_decl(module.name, function))
 
         lines.append("")
         lines.append(f"#endif /* {guard} */")
@@ -268,7 +268,7 @@ class BirCBackend:
         for function in module.functions:
             if self._should_export(function.visibility):
                 continue
-            lines.append(self._emit_function_decl(function, force_static=True))
+            lines.append(self._emit_function_decl(module.name, function, force_static=True))
         if module.functions:
             private_functions = [fn for fn in module.functions if not self._should_export(fn.visibility)]
             if private_functions:
@@ -277,6 +277,8 @@ class BirCBackend:
         module_context = ModuleEmissionContext(module=module, helper_names=helper_names)
         for function in module.functions:
             lines.extend(self._emit_function_impl(module_context, function))
+        if self._is_entry_module(module.name):
+            lines.extend(self._emit_runtime_entry_wrapper(module))
 
         return "\n".join(lines)
 
@@ -295,13 +297,22 @@ class BirCBackend:
 
     def _emit_function_decl(
         self,
+        module_name: str,
         function: Function,
         *,
         force_static: bool = False,
     ) -> str:
         prefix = self._function_prefix(function, force_static=force_static)
         params = ", ".join(self._emit_param_decl(param) for param in function.params) or "void"
-        return f"{prefix}{self._emit_type(function.returns)} {function.name}({params});"
+        symbol_name = self._declaration_symbol(module_name, function.name)
+        return_type = function.returns
+        if (
+            self.program is not None
+            and self.program.runtime.entry_symbol is not None
+            and self._is_entry_function(module_name, function.name)
+        ):
+            return_type = Type(kind=self.program.runtime.entry_return)
+        return f"{prefix}{self._emit_type(return_type)} {symbol_name}({params});"
 
     def _emit_extern_decl(self, extern_fn: Extern, *, emit_name: Optional[str] = None) -> str:
         params = ", ".join(self._emit_param_decl(param) for param in extern_fn.params) or "void"
@@ -363,6 +374,70 @@ class BirCBackend:
 
     def _should_export(self, visibility: str) -> bool:
         return visibility == "public" or self.export_all or visibility == "entry"
+
+    def _is_entry_module(self, module_name: str) -> bool:
+        return self.program is not None and self.program.entry.module == module_name
+
+    def _is_entry_function(self, module_name: str, function_name: str) -> bool:
+        return (
+            self.program is not None
+            and self.program.entry.module == module_name
+            and self.program.entry.name == function_name
+        )
+
+    def _declaration_symbol(self, module_name: str, function_name: str) -> str:
+        if (
+            self.program is not None
+            and self.program.runtime.entry_symbol is not None
+            and self._is_entry_function(module_name, function_name)
+        ):
+            return self.program.runtime.entry_symbol
+        return function_name
+
+    def _implementation_symbol(self, module_name: str, function_name: str) -> str:
+        if (
+            self.program is not None
+            and self.program.runtime.entry_symbol is not None
+            and self._is_entry_function(module_name, function_name)
+        ):
+            return self.program.runtime.internal_entry_symbol
+        return function_name
+
+    def _call_symbol(self, callee_name: str) -> str:
+        if (
+            self.program is not None
+            and self.program.runtime.entry_symbol is not None
+            and callee_name == self.program.entry.name
+        ):
+            return self.program.runtime.internal_entry_symbol
+        return callee_name
+
+    def _emit_runtime_entry_wrapper(self, module: Module) -> List[str]:
+        if self.program is None or self.program.runtime.entry_symbol is None:
+            return []
+        entry_function = next((fn for fn in module.functions if fn.name == self.program.entry.name), None)
+        if entry_function is None:
+            return []
+
+        wrapper_name = self.program.runtime.entry_symbol
+        internal_name = self.program.runtime.internal_entry_symbol
+        lines = [
+            f"{'int' if self.program.runtime.entry_return == 'i32' else 'void'} {wrapper_name}(void) {{"
+        ]
+        if self.program.runtime.entry_return == "void":
+            if entry_function.returns.kind == "void":
+                lines.append(f"    {internal_name}();")
+            else:
+                lines.append(f"    (void){internal_name}();")
+        else:
+            if entry_function.returns.kind == "void":
+                lines.append(f"    {internal_name}();")
+                lines.append("    return 0;")
+            else:
+                lines.append(f"    return {internal_name}();")
+        lines.append("}")
+        lines.append("")
+        return lines
 
     def _collect_used_helpers(self, module: Module) -> Set[str]:
         used: Set[str] = set()
@@ -459,7 +534,8 @@ class FunctionEmitter:
             force_static=not self.backend._should_export(self.function.visibility),
         )
         params = ", ".join(self.backend._emit_param_decl(param) for param in self.function.params) or "void"
-        self._line(f"{prefix}{self.backend._emit_type(self.function.returns)} {self.function.name}({params}) {{")
+        function_name = self.backend._implementation_symbol(self.context.module.name, self.function.name)
+        self._line(f"{prefix}{self.backend._emit_type(self.function.returns)} {function_name}({params}) {{")
         self.indent += 1
 
         for declaration in self.local_decls:
@@ -567,6 +643,8 @@ class FunctionEmitter:
         extern_decl = self.context.extern_map.get(callee_name)
         if extern_decl is not None and callee_name not in self.context.helper_names:
             callee_name = extern_decl.symbol_name or extern_decl.name
+        else:
+            callee_name = self.backend._call_symbol(callee_name)
 
         args = ", ".join(self._render_value(arg) for arg in instruction.operands[1:])
         if instruction.result is None:

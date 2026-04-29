@@ -1,0 +1,21 @@
+#[max_memory(2kb)]
+
+@ffi(lib="vendor.esp_gpio")
+@deterministic
+@isr_safe
+@reentrant
+@stack(32)
+extern fn gpio_set_level_raw(pin: u32, level: u32) -> void = "gpio_set_level";
+
+public fn set_led(pin: u32, on: bool) -> void {
+    let level: u32 = 0 as u32;
+    if on {
+        level = 1 as u32;
+    }
+    gpio_set_level_raw(pin, level);
+}
+
+fn main() -> i32 {
+    set_led(2 as u32, true);
+    return 0;
+}

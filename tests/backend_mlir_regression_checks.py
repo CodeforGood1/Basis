@@ -15,6 +15,7 @@ from pipeline_support import build_bir_program
 
 def assert_backend_emits_basis_dialect_artifacts():
     source = """#[max_memory(8kb)]
+@ffi(lib="basis.test_support")
 @deterministic
 @stack(64)
 extern fn platform_tick() -> u32;

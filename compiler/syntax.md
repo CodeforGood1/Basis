@@ -149,14 +149,19 @@ fn fill_data(out: *u8) -> void { ... }      // Use out parameter
 
 ### Extern Functions (C Interop)
 ```basis
+@ffi(lib="vendor.uart")
 @deterministic @allocates @stack(64) extern fn malloc(size: u32) -> *u8;
+@ffi(lib="vendor.uart")
 @deterministic @stack(64) extern fn free(ptr: *u8) -> void;
+@ffi(lib="vendor.console")
 @nondeterministic @blocking @stack(64) extern fn read_i32() -> i32;
+@ffi(lib="vendor.console")
 @deterministic @blocking @stack(64) extern fn puts(s: *u8) -> i32;
 ```
 
 Every `extern fn` must declare `@stack(N)` and exactly one determinism contract: `@deterministic` or `@nondeterministic`.
 `@blocking`, `@allocates(max=N)`, `@storage(...)`, `@reentrant`, `@uses_timer`, `@may_fail`, and `@isr_safe` are optional effect refinements.
+User-defined externs must also declare `@ffi(lib="...")`. The compiler resolves that library through an FFI manifest and enforces trust levels (`trusted`, `reviewed`, `unverified`, `unsafe`) under `--ffi-policy`.
 
 ### Task Functions
 ```basis

@@ -1,14 +1,17 @@
 #[max_memory(8kb)]
 
+@ffi(lib="demo.platform")
 @deterministic
 @stack(32)
 extern fn checksum(seed: u32) -> u32;
 
+@ffi(lib="demo.platform")
 @deterministic
 @blocking
 @stack(48)
 extern fn log_line(s: *u8) -> void;
 
+@ffi(lib="demo.platform")
 @deterministic
 @allocates(max=96)
 @stack(32)
