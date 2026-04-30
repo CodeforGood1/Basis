@@ -1,6 +1,8 @@
 from pathlib import Path
 import subprocess
 import sys
+import shutil
+import uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +18,15 @@ def run_basis(*args: str):
     return result.returncode, result.stdout + result.stderr
 
 
+def with_temp_output(*args: str):
+    out_dir = ROOT / "tests" / "_tmp_backend" / f"backend_select_{uuid.uuid4().hex}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        return run_basis(*args, "-o", str(out_dir))
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)
+
+
 def assert_backend_c_explicit_flag_works():
     exit_code, output = run_basis("build", "examples/hello.bs", "--backend", "c", "--emit-c")
     assert exit_code == 0, output
@@ -26,7 +37,7 @@ def assert_backend_c_explicit_flag_works():
 def assert_backend_mlir_explicit_flag_works():
     exit_code, output = run_basis("build", "examples/hello.bs", "--backend", "mlir", "--emit-c")
     assert exit_code == 0, output
-    assert "Generated internal MLIR lowering artifacts in" in output
+    assert "Generated MLIR backend artifacts in" in output
     assert "Generated target bundle manifest at" in output
 
 
@@ -63,10 +74,16 @@ def assert_compare_mode_rejects_run():
     assert "--run cannot be used with --compare-backends" in output
 
 
-def assert_run_rejected_for_mlir_backend():
-    exit_code, output = run_basis("build", "examples/hello.bs", "--backend", "mlir", "--run")
-    assert exit_code != 0, output
-    assert "--run is only supported with --backend=c" in output
+def assert_run_works_for_mlir_backend():
+    exit_code, output = with_temp_output("build", "examples/hello.bs", "--backend", "mlir", "--run")
+    assert exit_code == 0, output
+    assert "Built executable:" in output
+
+
+def assert_run_works_for_llvm_backend():
+    exit_code, output = with_temp_output("build", "examples/hello.bs", "--backend", "llvm", "--run")
+    assert exit_code == 0, output
+    assert "Built executable:" in output
 
 
 if __name__ == "__main__":
@@ -75,5 +92,6 @@ if __name__ == "__main__":
     assert_backend_llvm_explicit_flag_works()
     assert_compare_mode_reports_backend_status()
     assert_compare_mode_rejects_run()
-    assert_run_rejected_for_mlir_backend()
+    assert_run_works_for_mlir_backend()
+    assert_run_works_for_llvm_backend()
     print("Backend selection regression checks passed.")

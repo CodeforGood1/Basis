@@ -7,6 +7,7 @@ import sys
 import os
 import argparse
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Dict, Sequence
@@ -117,6 +118,18 @@ def compile_objects(c_files: List[Path], output_path: Path) -> List[Path]:
     return object_files
 
 
+def link_host_executable(object_files: List[Path], binary_path: Path) -> None:
+    """Link host object files into a runnable executable."""
+    if not object_files:
+        raise RuntimeError("no object files available for host linking")
+    link_cmd = ["gcc", "-o", to_native_tool_path(binary_path)]
+    link_cmd.extend(to_native_tool_path(path) for path in object_files)
+    result = subprocess.run(link_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(details or "gcc link failed")
+
+
 def measure_object_code_size(object_files: List[Path]) -> int:
     """Measure compiled code size using object section totals."""
     total_bytes = 0
@@ -209,16 +222,35 @@ def emit_backend(
 ) -> BackendEmissionResult:
     if backend == "mlir":
         mlir_backend = BasisMlirBackend(diag, export_all=export_all)
-        success = mlir_backend.generate_all(bir_program, output_path)
-        if not success or diag.has_errors():
+        object_path = mlir_backend.generate_all(bir_program, output_path)
+        if diag.has_errors():
             raise BasisMlirBackendError("MLIR backend generation failed")
+        exact_code_size = None
+        fallback_reason = None
+        if object_path is not None:
+            try:
+                exact_code_size = measure_object_code_size([object_path])
+            except (FileNotFoundError, RuntimeError) as exc:
+                fallback_reason = str(exc)
+        binary_path: Optional[Path] = None
+        if not emit_c_only and not is_library and bir_program.runtime.supports_host_run:
+            if object_path is None:
+                raise BasisMlirBackendError("MLIR backend did not produce a host object file")
+            binary_name = f"{bir_program.name}.exe" if sys.platform == "win32" else bir_program.name
+            binary_path = output_path / binary_name
+            print("Linking MLIR host executable with gcc...")
+            try:
+                link_host_executable([object_path], binary_path)
+            except FileNotFoundError:
+                raise FileNotFoundError("gcc not found. Please install gcc and ensure it's in PATH.")
+            print(f"Built executable: {to_native_tool_path(binary_path)}")
         return BackendEmissionResult(
             backend=backend,
             status="ok",
             artifact_dir=output_path,
-            fallback_reason=(
-                "MLIR output is currently an internal lowering snapshot from BIR; production MLIR toolchain integration is still pending."
-            ),
+            exact_code_size=exact_code_size,
+            binary_path=binary_path,
+            fallback_reason=fallback_reason,
             message=f"generated backend '{backend}' artifacts in {to_native_tool_path(output_path)}",
         )
 
@@ -233,12 +265,25 @@ def emit_backend(
             except (FileNotFoundError, RuntimeError) as exc:
                 fallback_reason = str(exc)
         else:
-            fallback_reason = "LLVM backend emitted verified .ll/.llvm.mlir artifacts only; object generation is host-only in the current configuration."
+            fallback_reason = "LLVM backend did not produce an object file for this target/runtime configuration."
+        binary_path: Optional[Path] = None
+        if not emit_c_only and not is_library and bir_program.runtime.supports_host_run:
+            if object_path is None:
+                raise BasisLlvmBackendError("LLVM backend did not produce a host object file")
+            binary_name = f"{bir_program.name}.exe" if sys.platform == "win32" else bir_program.name
+            binary_path = output_path / binary_name
+            print("Linking LLVM host executable with gcc...")
+            try:
+                link_host_executable([object_path], binary_path)
+            except FileNotFoundError:
+                raise FileNotFoundError("gcc not found. Please install gcc and ensure it's in PATH.")
+            print(f"Built executable: {to_native_tool_path(binary_path)}")
         return BackendEmissionResult(
             backend=backend,
             status="ok",
             artifact_dir=output_path,
             exact_code_size=exact_code_size,
+            binary_path=binary_path,
             fallback_reason=fallback_reason,
             message=f"generated backend '{backend}' artifacts in {to_native_tool_path(output_path)}",
         )
@@ -282,15 +327,10 @@ def emit_backend(
     if not emit_c_only and not is_library and bir_program.runtime.supports_host_run:
         binary_name = f"{bir_program.name}.exe" if sys.platform == "win32" else bir_program.name
         binary_path = output_path / binary_name
-        gcc_cmd = ["gcc", "-std=c99", "-o", to_native_tool_path(binary_path)]
-        gcc_cmd.extend(to_native_tool_path(f) for f in object_files)
-        print("Compiling with gcc...")
+        print("Linking C host executable with gcc...")
 
         try:
-            result = subprocess.run(gcc_cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                details = (result.stderr or result.stdout or "").strip()
-                raise RuntimeError(details or "gcc compilation failed")
+            link_host_executable(object_files, binary_path)
         except FileNotFoundError:
             raise FileNotFoundError("gcc not found. Please install gcc and ensure it's in PATH.")
 
@@ -507,9 +547,6 @@ def compile_basis(input_files: List[str],
         compare_backends.insert(0, backend)
     if compare_backends and run_after:
         print("error: --run cannot be used with --compare-backends", file=sys.stderr)
-        return 1
-    if run_after and backend != "c":
-        print(f"error: --run is only supported with --backend=c (requested '{backend}')", file=sys.stderr)
         return 1
     
     effective_target_config = target_config or TargetConfig.from_name("host")
@@ -1051,10 +1088,7 @@ def compile_basis(input_files: List[str],
             print(f"error: {exc}", file=sys.stderr)
             return 1
         except RuntimeError as exc:
-            if "gcc compilation failed" in str(exc):
-                print("error: gcc compilation failed", file=sys.stderr)
-            else:
-                print("error: object compilation failed", file=sys.stderr)
+            print("error: backend artifact build failed", file=sys.stderr)
             print(str(exc), file=sys.stderr)
             return 1
         except (BirCBackendError, BasisMlirBackendError, ValueError) as exc:
@@ -1064,7 +1098,7 @@ def compile_basis(input_files: List[str],
         if backend == "c":
             print(f"Generated C code in {to_native_tool_path(output_path)}")
         elif backend == "mlir":
-            print(f"Generated internal MLIR lowering artifacts in {to_native_tool_path(output_path)}")
+            print(f"Generated MLIR backend artifacts in {to_native_tool_path(output_path)}")
         elif backend == "llvm":
             print(f"Generated LLVM artifacts in {to_native_tool_path(output_path)}")
         if primary_backend_result.manifest_path is not None:
@@ -1083,14 +1117,8 @@ def compile_basis(input_files: List[str],
     code_size_info = build_code_size_info(
         estimated_code_size,
         exact_code_size,
-        emit_c_only=(emit_c_only or backend != "c"),
+        emit_c_only=emit_c_only,
         is_library=is_library,
-        artifact_only_reason=(
-            "Code size is estimated only because the MLIR backend currently emits textual IR artifacts; "
-            "code bytes are not enforced in #[max_memory] or flash budgets."
-            if backend == "mlir"
-            else None
-        ),
         fallback_reason=code_size_fallback_reason,
     )
     total_program_size = runtime_memory_size + (code_size_info.exact_bytes or 0)
@@ -1257,7 +1285,7 @@ def compile_basis(input_files: List[str],
         validation_error = effective_target_config.validate_resources(
             total_stack,
             total_heap,
-            code_size=None,
+            code_size=code_size_info.exact_bytes,
         )
 
         if validation_error:
@@ -1272,9 +1300,12 @@ def compile_basis(input_files: List[str],
         print(f"\n[OK] Resource validation passed for target: {effective_target_config.target.name}")
         print(f"  Stack: {total_stack}B / {effective_target_config.target.stack_bytes}B")
         print(f"  Heap:  {total_heap}B")
-        print(f"  Code:  not validated (target artifact size unavailable)")
+        if code_size_info.exact_bytes is None:
+            print(f"  Code:  not validated (target artifact size unavailable)")
+        else:
+            print(f"  Code:  {code_size_info.exact_bytes}B / {effective_target_config.target.flash_bytes}B")
 
-    if emit_c_only or is_library or backend != "c":
+    if emit_c_only or is_library or not run_after:
         return 0
     
     # ========================================================================
@@ -1282,14 +1313,21 @@ def compile_basis(input_files: List[str],
     # ========================================================================
     
     if run_after:
+        if binary_path is None:
+            print("error: requested --run but no runnable host binary was produced", file=sys.stderr)
+            return 1
         print(f"\nRunning {to_native_tool_path(binary_path)}...")
         print("=" * 70)
-        try:
-            result = subprocess.run([to_native_tool_path(binary_path)])
-            return result.returncode
-        except Exception as e:
-            print(f"error: failed to run executable: {e}", file=sys.stderr)
-            return 1
+        for attempt in range(5):
+            try:
+                result = subprocess.run([to_native_tool_path(binary_path)])
+                return result.returncode
+            except OSError as e:
+                if getattr(e, "winerror", None) == 32 and attempt < 4:
+                    time.sleep(0.2 * (attempt + 1))
+                    continue
+                print(f"error: failed to run executable: {e}", file=sys.stderr)
+                return 1
     
     return 0
 

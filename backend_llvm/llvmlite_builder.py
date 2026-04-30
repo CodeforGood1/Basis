@@ -3,7 +3,9 @@ Real LLVM backend builder using llvmlite.
 """
 
 import base64
+import subprocess
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Dict, List, Optional
 
 from llvmlite import binding as llvm
@@ -54,8 +56,8 @@ class LlvmLiteProgramBuilder:
         llvm.initialize_native_asmprinter()
         module_ref = llvm.parse_assembly(str(self.module))
         module_ref.verify()
-        target = llvm.Target.from_default_triple()
-        target_machine = target.create_target_machine()
+        target = llvm.Target.from_triple(self.module.triple)
+        target_machine = target.create_target_machine(reloc="static", codemodel="small")
         return target_machine.emit_object(module_ref)
 
     def _declare_structs(self):
@@ -637,7 +639,34 @@ def _cast_value(builder: ir.IRBuilder, value: ir.Value, source_type: Type, targe
 
 def _effective_target_triple(target_triple: str) -> str:
     if target_triple == "native":
-        llvm.initialize()
-        llvm.initialize_native_target()
-        return llvm.get_default_triple()
+        return _native_host_triple()
     return target_triple
+
+
+@lru_cache(maxsize=1)
+def _native_host_triple() -> str:
+    llvm.initialize()
+    llvm.initialize_native_target()
+    default_triple = llvm.get_default_triple()
+    if default_triple.endswith("windows-msvc"):
+        gcc_triple = _probe_gcc_triple()
+        if gcc_triple:
+            return gcc_triple
+    return default_triple
+
+
+@lru_cache(maxsize=1)
+def _probe_gcc_triple() -> Optional[str]:
+    try:
+        result = subprocess.run(
+            ["gcc", "-dumpmachine"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+    triple = (result.stdout or "").strip()
+    return triple or None

@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Sequence
 import json
 import os
 import shlex
+import shutil
 
 from bir.model import ProgramRuntime
 from target_config import TargetLimits
@@ -40,6 +41,23 @@ class PlannedCommand:
 
 
 @dataclass(frozen=True)
+class ToolRequirement:
+    name: str
+    required_for: List[str]
+    available: bool
+    resolved_path: Optional[str]
+
+
+@dataclass(frozen=True)
+class SupportRequirement:
+    path: str
+    kind: str
+    required_for: List[str]
+    present: bool
+    description: str
+
+
+@dataclass(frozen=True)
 class TargetBundleManifest:
     schema_version: int
     program: str
@@ -58,6 +76,8 @@ class TargetBundleManifest:
     linker_script_expected: Optional[str]
     notes: List[str] = field(default_factory=list)
     artifacts: List[PlannedArtifact] = field(default_factory=list)
+    tool_requirements: List[ToolRequirement] = field(default_factory=list)
+    support_requirements: List[SupportRequirement] = field(default_factory=list)
     build: Optional[PlannedCommand] = None
     flash: Optional[PlannedCommand] = None
     run: Optional[PlannedCommand] = None
@@ -94,6 +114,8 @@ def write_target_bundle(
     if manifest.run is not None:
         _write_script(output_dir / "basis-run-target.ps1", _render_powershell(manifest.run))
         _write_script(output_dir / "basis-run-target.sh", _render_shell(manifest.run))
+    _write_script(output_dir / "basis-validate-target.ps1", _render_validation_powershell(manifest))
+    _write_script(output_dir / "basis-validate-target.sh", _render_validation_shell(manifest))
     return manifest_path
 
 
@@ -146,6 +168,13 @@ def _build_manifest(
         target=target,
         binary_path=binary_path,
     )
+    tool_requirements = _collect_tool_requirements(build=build, flash=flash)
+    support_requirements = _collect_support_requirements(
+        output_dir=output_dir,
+        target=target,
+        build=build,
+        flash=flash,
+    )
 
     linker_expected = None
     if target.linker_script_required and target.build_system != "esp-idf":
@@ -169,6 +198,8 @@ def _build_manifest(
         linker_script_expected=linker_expected,
         notes=notes,
         artifacts=artifacts,
+        tool_requirements=tool_requirements,
+        support_requirements=support_requirements,
         build=build,
         flash=flash,
         run=run,
@@ -531,6 +562,75 @@ def _render_manifest(manifest: TargetBundleManifest) -> Dict[str, object]:
     return asdict(manifest)
 
 
+def _collect_tool_requirements(
+    *,
+    build: Optional[PlannedCommand],
+    flash: Optional[PlannedCommand],
+) -> List[ToolRequirement]:
+    seen: Dict[str, ToolRequirement] = {}
+    for label, command in (("build", build), ("flash", flash)):
+        if command is None or not command.enabled:
+            continue
+        for step in command.steps:
+            if not step:
+                continue
+            tool_name = step[0]
+            existing = seen.get(tool_name)
+            resolved = shutil.which(tool_name)
+            if existing is None:
+                seen[tool_name] = ToolRequirement(
+                    name=tool_name,
+                    required_for=[label],
+                    available=resolved is not None,
+                    resolved_path=resolved,
+                )
+            elif label not in existing.required_for:
+                existing.required_for.append(label)
+    return list(seen.values())
+
+
+def _collect_support_requirements(
+    *,
+    output_dir: Path,
+    target: TargetLimits,
+    build: Optional[PlannedCommand],
+    flash: Optional[PlannedCommand],
+) -> List[SupportRequirement]:
+    requirements: List[SupportRequirement] = []
+    stages = []
+    if build is not None and build.enabled:
+        stages.append("build")
+    if flash is not None and flash.enabled:
+        stages.append("flash")
+
+    def add(path: Path, kind: str, description: str):
+        relative = path.relative_to(output_dir).as_posix()
+        requirements.append(
+            SupportRequirement(
+                path=relative,
+                kind=kind,
+                required_for=list(stages),
+                present=path.exists(),
+                description=description,
+            )
+        )
+
+    if target.linker_script_required and target.build_system != "esp-idf":
+        add(
+            output_dir / "target-support" / "linker_script.ld",
+            "linker_script",
+            "Board-specific linker script required by the generated target build wrapper.",
+        )
+    if target.startup_objects and target.build_system != "esp-idf":
+        for startup_object in target.startup_objects:
+            add(
+                output_dir / "target-support" / "startup" / startup_object,
+                "startup_object",
+                "Target startup object required by the generated target build wrapper.",
+            )
+    return requirements
+
+
 def _render_powershell(command: Optional[PlannedCommand]) -> str:
     if command is None:
         return _disabled_script("No command is defined for this target action.")
@@ -582,6 +682,70 @@ def _disabled_script(message: str) -> str:
 
 def _disabled_shell(message: str) -> str:
     return "\n".join(["#!/usr/bin/env sh", "set -eu", f'echo "{message}" >&2', "exit 1", ""])
+
+
+def _render_validation_powershell(manifest: TargetBundleManifest) -> str:
+    lines = [
+        "param()",
+        '$ErrorActionPreference = "Stop"',
+        '$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path',
+        'Set-Location $ScriptDir',
+        "$failed = $false",
+        "",
+    ]
+    for tool in manifest.tool_requirements:
+        rendered_name = _quote_powershell(tool.name)
+        label = ", ".join(tool.required_for)
+        lines.append(f"$tool = Get-Command {rendered_name} -ErrorAction SilentlyContinue")
+        lines.append("if (-not $tool) {")
+        lines.append(f'    Write-Error "Missing required tool: {tool.name} ({label})"')
+        lines.append("    $failed = $true")
+        lines.append("}")
+        lines.append("")
+    for requirement in manifest.support_requirements:
+        rendered_path = _quote_powershell(requirement.path)
+        label = ", ".join(requirement.required_for)
+        lines.append(f'if (-not (Test-Path -LiteralPath {rendered_path})) {{')
+        lines.append(f'    Write-Error "Missing required support file: {requirement.path} ({label})"')
+        lines.append("    $failed = $true")
+        lines.append("}")
+        lines.append("")
+    lines.append('if ($failed) { throw "Target bundle validation failed." }')
+    lines.append('Write-Output "Target bundle validation passed."')
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_validation_shell(manifest: TargetBundleManifest) -> str:
+    lines = [
+        "#!/usr/bin/env sh",
+        "set -eu",
+        'SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)',
+        'cd "$SCRIPT_DIR"',
+        "failed=0",
+        "",
+    ]
+    for tool in manifest.tool_requirements:
+        label = ", ".join(tool.required_for)
+        lines.append(f"if ! command -v {shlex.quote(tool.name)} >/dev/null 2>&1; then")
+        lines.append(f'  echo "Missing required tool: {tool.name} ({label})" >&2')
+        lines.append("  failed=1")
+        lines.append("fi")
+        lines.append("")
+    for requirement in manifest.support_requirements:
+        label = ", ".join(requirement.required_for)
+        lines.append(f"if [ ! -e {shlex.quote(requirement.path)} ]; then")
+        lines.append(f'  echo "Missing required support file: {requirement.path} ({label})" >&2')
+        lines.append("  failed=1")
+        lines.append("fi")
+        lines.append("")
+    lines.append('if [ "$failed" -ne 0 ]; then')
+    lines.append('  echo "Target bundle validation failed." >&2')
+    lines.append("  exit 1")
+    lines.append("fi")
+    lines.append('echo "Target bundle validation passed."')
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _write_script(path: Path, content: str):

@@ -4,7 +4,7 @@
 
 BASIS is designed for firmware and embedded logic that must stay bounded, predictable, and easier to reason about as systems grow. It focuses on classes of problems that often remain hidden until integration or long running field use, such as unclear stack growth, hidden heap usage, unsafe interrupt paths, and foreign calls whose behavior is not explicit.
 
-Today BASIS validates programs through its own frontend and lowers them through a shared internal BIR layer. It has a stable C backend, a real LLVM backend that emits verified `.ll` plus host object files, and an MLIR path that currently serves as a structured lowering artifact rather than a standalone production toolchain backend. The goal is to provide a constrained programming model where important properties of embedded code can be checked earlier, reported clearly, and integrated into existing C-based projects without requiring a completely separate runtime ecosystem.
+Today BASIS validates programs through its own frontend and lowers them through a shared internal BIR layer. It has a stable C backend, a real LLVM backend that emits verified `.ll` plus host binaries for supported host targets, and an MLIR backend that preserves `.mlir` / `.llvm.mlir` artifacts while also producing real LLVM/object outputs for the same supported matrix. The goal is to provide a constrained programming model where important properties of embedded code can be checked earlier, reported clearly, and integrated into existing C-based projects without requiring a completely separate runtime ecosystem.
 
 If you are new to the project, start with [LEARN.md](LEARN.md) for a guided introduction before moving to the full reference documentation.
 
@@ -70,8 +70,8 @@ BASIS currently provides the following language and compiler capabilities:
 ## Backend Status
 
 - `--backend=c`: stable production backend and default path
-- `--backend=llvm`: real LLVM IR plus host object emission; target bundles include toolchain wrappers for host and embedded targets
-- `--backend=mlir`: structured lowering/debug artifact path; not a standalone production backend yet
+- `--backend=llvm`: real LLVM IR, verified host object generation, and host `--run` support on the supported toolchain matrix
+- `--backend=mlir`: real backend path that preserves MLIR artifacts and also emits LLVM IR/object outputs for the supported matrix
 
 ## Target Bundles
 
@@ -81,8 +81,10 @@ Every successful build now emits a `basis-target-manifest.json` alongside wrappe
 - `basis-build-target.sh`
 - `basis-flash-target.ps1`
 - `basis-flash-target.sh`
+- `basis-validate-target.ps1`
+- `basis-validate-target.sh`
 
-These files describe the target triple, ABI, build system, expected startup objects, linker-script requirements, and flash command for the selected target. Current built-in target profiles include:
+These files describe the target triple, ABI, build system, expected startup objects, linker-script requirements, flash command, required tools, and required support files for the selected target. Current built-in target profiles include:
 
 - `host`
 - `embedded_linux`
@@ -90,7 +92,7 @@ These files describe the target triple, ABI, build system, expected startup obje
 - `stm32`
 - `rp2040`
 
-For ESP32 C builds, BASIS also generates an ESP-IDF project scaffold under `esp32_project/`. For bare-metal targets such as STM32 and RP2040, BASIS generates `target-support/` scaffolding for linker scripts and startup objects that must be completed with board-specific inputs before building a final image.
+For ESP32 C builds, BASIS also generates an ESP-IDF project scaffold under `esp32_project/`. For bare-metal targets such as STM32 and RP2040, BASIS generates `target-support/` scaffolding for linker scripts and startup objects that must be completed with board-specific inputs before building a final image. The validation scripts fail fast when required external tools or support files are missing, so the generated bundle can be checked before a build or flash attempt.
 
 BASIS is an embedded systems language under active development, with a working compiler, a static analysis pipeline, a growing standard library, and verified source and packaged workflows.
 

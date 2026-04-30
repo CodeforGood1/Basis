@@ -52,6 +52,7 @@ function Invoke-BasisCheck {
     backend_llvm\llvmlite_builder.py `
     backend_llvm\llvm_ir.py `
     backend_llvm\lower.py `
+    backend_llvm\pipeline.py `
     backend_llvm\verify.py `
     backend_mlir\__init__.py `
     backend_mlir\emitter.py `
@@ -346,9 +347,17 @@ if (-not $budgetOutput.Contains("ERROR: Program exceeds declared memory budget!"
     throw "Expected exact code budget failure output to contain the budget error.`n$budgetOutput"
 }
 
-Invoke-BasisCheck `
-    -CommandArgs @("build", "tests\cases\heuristic_budget_emit_c.bs", "--emit-c", "--target-config", "tests\cases\tiny_flash_target.json") `
-    -RequiredText @("Code:  not validated (target artifact size unavailable)")
+$tinyFlashOutput = (& cmd /c "python compiler\basis.py build tests\cases\heuristic_budget_emit_c.bs --emit-c --target-config tests\cases\tiny_flash_target.json 2>&1" | Out-String)
+$tinyFlashExit = $LASTEXITCODE
+if ($tinyFlashExit -eq 0) {
+    throw "Command unexpectedly succeeded: python compiler\basis.py build tests\cases\heuristic_budget_emit_c.bs --emit-c --target-config tests\cases\tiny_flash_target.json`n$tinyFlashOutput"
+}
+if (-not $tinyFlashOutput.Contains("target resource limits exceeded")) {
+    throw "Expected tiny flash target failure output to contain the target limit heading.`n$tinyFlashOutput"
+}
+if (-not $tinyFlashOutput.Contains("Flash overflow:")) {
+    throw "Expected tiny flash target failure output to contain the flash overflow detail.`n$tinyFlashOutput"
+}
 
 if ($VerifyPackage) {
     & powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Clean -Package

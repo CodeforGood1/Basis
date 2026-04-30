@@ -52,9 +52,12 @@ fn main() -> i32 {
     out_dir = ROOT / "tests" / "_tmp_backend" / f"mlir_{uuid.uuid4().hex}"
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        assert backend.generate_all(program, out_dir), "MLIR backend unexpectedly failed"
+        object_path = backend.generate_all(program, out_dir)
+        assert object_path is not None, "MLIR backend did not emit a host object file"
+        assert object_path.exists(), "MLIR backend object file missing"
         artifact = (out_dir / "sample_program.mlir").read_text(encoding="utf-8")
         llvm_artifact = (out_dir / "sample_program.llvm.mlir").read_text(encoding="utf-8")
+        llvm_ir = (out_dir / "sample_program.ll").read_text(encoding="utf-8")
 
         assert "basis.program @sample_program" in artifact
         assert "basis.module @sample" in artifact
@@ -74,6 +77,7 @@ fn main() -> i32 {
         assert "llvm.call" in llvm_artifact
         assert "llvm.icmp" in llvm_artifact
         assert "llvm.cond_br" in llvm_artifact
+        assert 'define external i32 @"main"()' in llvm_ir
     finally:
         for path in sorted(out_dir.glob("*")):
             path.unlink()

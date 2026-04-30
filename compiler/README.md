@@ -36,8 +36,8 @@ python basis.py build hello.bs --compare-backends c,mlir,llvm --emit-c
 ```
 
 - `c` is the stable production backend.
-- `llvm` emits verified LLVM IR and host object files from validated BIR.
-- `mlir` emits structured lowering artifacts and is currently intended for inspection, conversion work, and regression coverage rather than direct production deployment.
+- `llvm` emits verified LLVM IR, host object files, and host-runnable binaries from validated BIR on the supported host toolchain matrix.
+- `mlir` preserves structured MLIR lowering artifacts and also emits real LLVM/object outputs on the supported host matrix.
 
 ### Library Mode (for linking with C)
 BASIS removes `while` loops entirely, so embedded apps typically use C or a HAL for scheduling:
@@ -53,8 +53,9 @@ Every successful build emits:
 - `basis-target-manifest.json`
 - `basis-build-target.ps1` and `basis-build-target.sh`
 - `basis-flash-target.ps1` and `basis-flash-target.sh` when the target profile defines flashing
+- `basis-validate-target.ps1` and `basis-validate-target.sh` for tool and support-file preflight checks
 
-The manifest records the selected target triple, ABI, build system, startup object expectations, linker-script expectations, SDK integration mode, and generated artifacts. ESP32 C builds also emit an `esp32_project/` scaffold; bare-metal targets emit `target-support/` scaffolding for linker scripts and startup objects.
+The manifest records the selected target triple, ABI, build system, startup object expectations, linker-script expectations, SDK integration mode, generated artifacts, required external tools, and required support files. ESP32 C builds also emit an `esp32_project/` scaffold; bare-metal targets emit `target-support/` scaffolding for linker scripts and startup objects.
 
 ### With Standard Library
 ```basis
